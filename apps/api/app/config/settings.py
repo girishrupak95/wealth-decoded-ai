@@ -43,6 +43,23 @@ class OpenAISettings(BaseSettings):
     max_tokens: int = Field(gt=0)
 
 
+class VisualAssetSettings(BaseSettings):
+    """Cost-control settings for visual asset package generation."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_prefix="VISUAL_ASSET_",
+        extra="ignore",
+    )
+
+    live_generation: bool = False
+    max_live_images: int = Field(default=5, ge=0)
+    fail_fast: bool = False
+    image_model: str = "gpt-image-1"
+    image_quality: str | None = None
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Return the cached application configuration."""

@@ -23,6 +23,25 @@ make format
 
 The API health check is available at `GET /health`.
 
+## Visual asset packages
+
+Generate a visual-asset package in manifest-only mode (the default) with no paid image calls:
+
+```bash
+VISUAL_ASSET_LIVE_GENERATION=false \
+uv run python apps/api/scripts/run_visual_asset_generation.py
+```
+
+Manifest-only mode creates pending AI-image instructions, renders typography locally, creates
+stock-search requests, and does not incur image-generation API cost. To enable bounded live
+image generation, set an explicit limit:
+
+```bash
+VISUAL_ASSET_LIVE_GENERATION=true \
+VISUAL_ASSET_MAX_LIVE_IMAGES=3 \
+uv run python apps/api/scripts/run_visual_asset_generation.py
+```
+
 ## Voiceover generation
 
 Voiceover generation uses ElevenLabs through a provider-independent interface and requires an
