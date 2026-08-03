@@ -71,6 +71,14 @@ class TimelineClipStatus(StrEnum):
     FAILED = "failed"
 
 
+class RenderReadiness(StrEnum):
+    """Readiness of a persisted timeline package for a future renderer."""
+
+    READY = "ready"
+    READY_WITH_WARNINGS = "ready_with_warnings"
+    NOT_READY = "not_ready"
+
+
 class TimelineVideoSettings(BaseModel):
     aspect_ratio: str = DEFAULT_TIMELINE_ASPECT_RATIO
     width: int = Field(default=DEFAULT_TIMELINE_WIDTH, gt=0)
@@ -313,3 +321,15 @@ class Timeline(BaseModel):
             overlay_count=len(self.overlays),
             caption_count=len(self.captions),
         )
+
+
+class TimelinePersistenceResult(BaseModel):
+    """Persisted production package paths and deterministic render-readiness state."""
+
+    timeline: Timeline
+    output_directory: Path
+    timeline_json_path: Path
+    timeline_markdown_path: Path
+    edit_decision_list_path: Path
+    render_readiness: RenderReadiness
+    blocking_issues: list[str] = Field(default_factory=list)
