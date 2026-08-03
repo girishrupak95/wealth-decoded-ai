@@ -5,6 +5,11 @@ from enum import StrEnum
 
 from pydantic import Field, field_validator, model_validator
 
+from shared.constants import (
+    DEFAULT_STORYBOARD_ASPECT_RATIO,
+    DEFAULT_STORYBOARD_FRAME_RATE,
+    DEFAULT_STORYBOARD_RESOLUTION,
+)
 from shared.models.base import BaseModel
 
 
@@ -123,9 +128,9 @@ class Storyboard(BaseModel):
 
     title: str
     visual_style: str
-    aspect_ratio: str = "16:9"
-    resolution: str = "1920x1080"
-    frame_rate: int = 30
+    aspect_ratio: str = DEFAULT_STORYBOARD_ASPECT_RATIO
+    resolution: str = DEFAULT_STORYBOARD_RESOLUTION
+    frame_rate: int = DEFAULT_STORYBOARD_FRAME_RATE
     scenes: list[StoryboardScene]
     summary: StoryboardSummary
     production_warnings: list[str]
