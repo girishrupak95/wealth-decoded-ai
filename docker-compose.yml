@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      WEALTH_DATABASE_URL: postgresql+asyncpg://wealth_decoded:wealth_decoded@db:5432/wealth_decoded
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wealth_decoded
+      POSTGRES_USER: wealth_decoded
+      POSTGRES_PASSWORD: wealth_decoded
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wealth_decoded -d wealth_decoded"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
