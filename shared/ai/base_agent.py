@@ -1,0 +1,95 @@
+"""Reusable async execution lifecycle for agents."""
+
+import json
+from abc import ABC, abstractmethod
+from string import Template
+from time import perf_counter
+from typing import Any
+from uuid import uuid4
+
+from loguru import logger
+from pydantic import BaseModel, Field
+
+from shared.ai.knowledge_loader import KnowledgeLoader
+from shared.ai.llm_client import LLMClient, LLMRequest
+from shared.ai.output_validator import OutputValidator
+from shared.ai.prompt_loader import PromptLoader
+
+
+class AgentRequest(BaseModel):
+    prompt_name: str
+    system_prompt_name: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentExecution(BaseModel):
+    output: dict[str, Any]
+    execution_id: str
+    duration_ms: float
+
+
+class BaseAgent(ABC):
+    def __init__(
+        self,
+        *,
+        llm_client: LLMClient,
+        prompt_loader: PromptLoader,
+        knowledge_loader: KnowledgeLoader,
+        output_validator: OutputValidator,
+        logger_instance: Any = logger,
+    ) -> None:
+        self._llm_client = llm_client
+        self._prompt_loader = prompt_loader
+        self._knowledge_loader = knowledge_loader
+        self._output_validator = output_validator
+        self._logger = logger_instance.bind(component=self.__class__.__name__)
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Return the stable agent name."""
+
+    @property
+    @abstractmethod
+    def output_schema(self) -> type[BaseModel]:
+        """Return the model response schema."""
+
+    async def execute(self, request: AgentRequest) -> AgentExecution:
+        started_at = perf_counter()
+        execution_id = str(uuid4())
+        event_logger = self._logger.bind(execution_id=execution_id, agent_name=self.name)
+        event_logger.info("agent_execution_started", duration=0.0, status="started")
+        try:
+            knowledge = self._knowledge_loader.load_all()
+            context = {
+                key: json.dumps(value) if not isinstance(value, str) else value
+                for key, value in request.context.items()
+            }
+            context["knowledge"] = json.dumps(knowledge, sort_keys=True)
+            user_prompt = Template(self._prompt_loader.load(request.prompt_name)).substitute(
+                context
+            )
+            system_prompt = (
+                Template(self._prompt_loader.load(request.system_prompt_name)).substitute(context)
+                if request.system_prompt_name
+                else None
+            )
+            raw_output = await self._llm_client.generate(
+                LLMRequest(
+                    template=user_prompt,
+                    system_template=system_prompt,
+                    context=request.context,
+                    knowledge=knowledge,
+                )
+            )
+            output = self._output_validator.validate(raw_output, self.output_schema)
+        except Exception:
+            event_logger.exception(
+                "agent_execution_failed",
+                duration=round((perf_counter() - started_at) * 1000, 3),
+                status="failed",
+            )
+            raise
+        duration = round((perf_counter() - started_at) * 1000, 3)
+        event_logger.info("agent_execution_finished", duration=duration, status="succeeded")
+        return AgentExecution(output=output, execution_id=execution_id, duration_ms=duration)
