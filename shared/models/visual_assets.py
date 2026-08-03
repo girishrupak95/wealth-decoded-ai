@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from shared.models.base import BaseModel
 from shared.models.storyboard import VisualAssetType
@@ -49,10 +49,11 @@ class GeneratedAsset(BaseModel):
     duration_seconds: float | None = None
     mime_type: str | None = None
     checksum_sha256: str | None = None
+    content: bytes | None = None
     generated_at: datetime | None = None
     warnings: list[str] = Field(default_factory=list)
     error_message: str | None = None
-    metadata: dict[str, object] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_status(self) -> "GeneratedAsset":
@@ -87,6 +88,7 @@ class VisualAssetManifest(BaseModel):
     assets: list[GeneratedAsset]
     total_assets: int = 0
     generated_count: int = 0
+    pending_count: int = 0
     search_required_count: int = 0
     instruction_only_count: int = 0
     skipped_count: int = 0
@@ -101,6 +103,7 @@ class VisualAssetManifest(BaseModel):
         self.total_assets = len(self.assets)
         for status, name in (
             (VisualAssetStatus.GENERATED, "generated_count"),
+            (VisualAssetStatus.PENDING, "pending_count"),
             (VisualAssetStatus.SEARCH_REQUIRED, "search_required_count"),
             (VisualAssetStatus.INSTRUCTION_ONLY, "instruction_only_count"),
             (VisualAssetStatus.SKIPPED, "skipped_count"),
