@@ -1,0 +1,315 @@
+"""Deterministic prechecks and persistence for script reviews."""
+
+import asyncio
+import json
+import re
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Protocol
+
+from loguru import logger
+from pydantic import BaseModel
+
+from shared.constants import (
+    JSON_FILE_SUFFIX,
+    MARKDOWN_FILE_SUFFIX,
+    REVIEW_MAX_DURATION_SECONDS,
+    REVIEW_MAX_WORDS,
+    REVIEW_MIN_DURATION_SECONDS,
+    REVIEW_MIN_WORDS,
+)
+from shared.models.research import ResearchPackage
+from shared.models.script_review import ReviewFinding, ScriptReview
+from shared.models.video_concept import VideoConcept
+from shared.models.video_script import VideoScript
+
+
+class EditorialReviewer(Protocol):
+    async def review(
+        self, concept: VideoConcept, research: ResearchPackage, script: VideoScript
+    ) -> ScriptReview:
+        """Return a validated editorial review."""
+        ...
+
+
+class ScriptReviewArtifacts(BaseModel):
+    review: ScriptReview
+    generated_at: datetime
+    json_path: Path
+    markdown_path: Path
+
+
+class ScriptReviewService:
+    """Merge deterministic safeguards with an injected editorial reviewer."""
+
+    def __init__(self, reviewer_agent: EditorialReviewer, output_root: Path) -> None:
+        self._reviewer_agent = reviewer_agent
+        self._output_root = output_root
+        self._logger = logger.bind(component=self.__class__.__name__)
+
+    async def review(
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        script: VideoScript,
+        reviewed_at: datetime | None = None,
+    ) -> ScriptReviewArtifacts:
+        timestamp = reviewed_at or datetime.now(UTC)
+        deterministic = self._precheck(script)
+        editorial = await self._reviewer_agent.review(concept, research, script)
+        merged = self._merge(script, editorial, deterministic, timestamp)
+        directory = self._output_root / timestamp.date().isoformat()
+        await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
+        json_path, markdown_path = self._artifact_paths(directory, script.title)
+        await asyncio.gather(
+            asyncio.to_thread(
+                json_path.write_text,
+                json.dumps(merged.model_dump(mode="json"), indent=2),
+                "utf-8",
+            ),
+            asyncio.to_thread(markdown_path.write_text, self._to_markdown(merged), "utf-8"),
+        )
+        self._logger.info("script_review_saved", output_directory=str(directory))
+        return ScriptReviewArtifacts(
+            review=merged,
+            generated_at=timestamp,
+            json_path=json_path,
+            markdown_path=markdown_path,
+        )
+
+    def _precheck(self, script: VideoScript) -> list[ReviewFinding]:
+        findings: list[ReviewFinding] = []
+        if not REVIEW_MIN_WORDS <= script.estimated_word_count <= REVIEW_MAX_WORDS:
+            findings.append(
+                self._finding(
+                    "duration",
+                    "critical",
+                    None,
+                    "Script word count is outside the production range.",
+                    str(script.estimated_word_count),
+                    "Revise narration to 600-900 spoken words.",
+                )
+            )
+        if (
+            not REVIEW_MIN_DURATION_SECONDS
+            <= script.total_estimated_duration_seconds
+            <= REVIEW_MAX_DURATION_SECONDS
+        ):
+            findings.append(
+                self._finding(
+                    "duration",
+                    "warning",
+                    None,
+                    "Calculated duration is outside the channel target.",
+                    str(script.total_estimated_duration_seconds),
+                    "Adjust narration pacing or length.",
+                )
+            )
+        disclaimer = script.disclaimer.lower()
+        if "educat" not in disclaimer or "not" not in disclaimer or "advice" not in disclaimer:
+            findings.append(
+                self._finding(
+                    "compliance",
+                    "critical",
+                    None,
+                    "Required educational disclaimer is missing.",
+                    script.disclaimer,
+                    "State that the video is educational and not personalized financial advice.",
+                )
+            )
+        forbidden = ("guaranteed", "get rich quick", "risk-free")
+        narrative = " ".join(script.narration_texts()).lower()
+        for phrase in forbidden:
+            if phrase in narrative:
+                findings.append(
+                    self._finding(
+                        "compliance",
+                        "critical",
+                        None,
+                        "Risky promise language detected.",
+                        phrase,
+                        "Remove the risky promise or replace it with evidence-based wording.",
+                    )
+                )
+        for section in script.sections:
+            if not section.source_references and not section.verification_required:
+                findings.append(
+                    self._finding(
+                        "sourcing",
+                        "critical",
+                        section.section_id,
+                        "Section lacks source traceability.",
+                        section.narration,
+                        "Add a research reference or mark the section for editorial verification.",
+                    )
+                )
+        for sentence in self._duplicate_sentences(script):
+            findings.append(
+                self._finding(
+                    "repetition",
+                    "warning",
+                    None,
+                    "Duplicate narration sentence detected.",
+                    sentence,
+                    "Rewrite one repeated sentence to improve pacing.",
+                )
+            )
+        return findings
+
+    @staticmethod
+    def _duplicate_sentences(script: VideoScript) -> set[str]:
+        sentences = re.split(r"[.!?]+", " ".join(script.narration_texts()))
+        normalized: dict[str, str] = {}
+        duplicates: set[str] = set()
+        for sentence in sentences:
+            source = sentence.strip()
+            key = re.sub(r"\W+", " ", source.lower()).strip()
+            if len(key.split()) < 4:
+                continue
+            if key in normalized:
+                duplicates.add(normalized[key])
+            else:
+                normalized[key] = source
+        return duplicates
+
+    @staticmethod
+    def _finding(
+        category: str,
+        severity: str,
+        section_id: str | None,
+        message: str,
+        evidence: str,
+        change: str,
+    ) -> ReviewFinding:
+        return ReviewFinding(
+            finding_id=f"deterministic-{category}-{len(evidence)}",
+            category=category,
+            severity=severity,
+            section_id=section_id,
+            message=message,
+            evidence=evidence,
+            recommended_change=change,
+        )
+
+    def _merge(
+        self,
+        script: VideoScript,
+        editorial: ScriptReview,
+        deterministic: list[ReviewFinding],
+        timestamp: datetime,
+    ) -> ScriptReview:
+        unique: dict[tuple[str, str, str, str], ReviewFinding] = {}
+        for finding in [*deterministic, *editorial.findings]:
+            key = (finding.category, finding.severity, finding.message, finding.evidence)
+            unique.setdefault(key, finding)
+        findings = [
+            finding.model_copy(update={"finding_id": f"finding-{index}"})
+            for index, finding in enumerate(unique.values(), start=1)
+        ]
+        component_scores = [
+            editorial.scores.hook_score,
+            editorial.scores.accuracy_score,
+            editorial.scores.structure_score,
+            editorial.scores.retention_score,
+            editorial.scores.clarity_score,
+            editorial.scores.tone_score,
+            editorial.scores.compliance_score,
+        ]
+        overall = round(sum(component_scores) / len(component_scores), 2)
+        scores = editorial.scores.model_copy(update={"overall_score": overall})
+        critical = any(finding.severity == "critical" for finding in findings)
+        required = list(
+            dict.fromkeys(
+                [
+                    *editorial.required_changes,
+                    *[
+                        finding.recommended_change
+                        for finding in findings
+                        if finding.severity in {"critical", "warning"}
+                    ],
+                ]
+            )
+        )
+        approved = not critical and overall >= 8.0
+        if not approved and not required:
+            required = ["Address the review findings before approval."]
+        return ScriptReview(
+            script_title=script.title,
+            approved=approved,
+            scores=scores,
+            findings=findings,
+            revision_summary=editorial.revision_summary,
+            required_changes=required,
+            optional_improvements=editorial.optional_improvements,
+            reviewed_at=timestamp,
+            reviewer_version=editorial.reviewer_version,
+        )
+
+    @staticmethod
+    def _artifact_paths(directory: Path, title: str) -> tuple[Path, Path]:
+        stem = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "script-review"
+        suffix = 1
+        while True:
+            candidate = f"{stem}-review" if suffix == 1 else f"{stem}-review-{suffix}"
+            json_path = directory / f"{candidate}{JSON_FILE_SUFFIX}"
+            markdown_path = directory / f"{candidate}{MARKDOWN_FILE_SUFFIX}"
+            if not json_path.exists() and not markdown_path.exists():
+                return json_path, markdown_path
+            suffix += 1
+
+    @staticmethod
+    def _to_markdown(review: ScriptReview) -> str:
+        scores = review.scores
+
+        def findings(severity: str) -> list[ReviewFinding]:
+            return [finding for finding in review.findings if finding.severity == severity]
+
+        lines = [
+            f"# Script Review: {review.script_title}",
+            "",
+            "## Decision",
+            f"Approved: {'Yes' if review.approved else 'No'}",
+            f"Overall Score: {scores.overall_score}/10",
+            "",
+            "## Scorecard",
+        ]
+        lines.extend(
+            [
+                f"- Hook: {scores.hook_score}",
+                f"- Accuracy: {scores.accuracy_score}",
+                f"- Structure: {scores.structure_score}",
+                f"- Retention: {scores.retention_score}",
+                f"- Clarity: {scores.clarity_score}",
+                f"- Tone: {scores.tone_score}",
+                f"- Compliance: {scores.compliance_score}",
+            ]
+        )
+        for heading, items in (
+            ("Critical Findings", findings("critical")),
+            ("Warnings", findings("warning")),
+        ):
+            lines.extend(
+                [
+                    "",
+                    f"## {heading}",
+                    *[f"- {item.message}: {item.recommended_change}" for item in items],
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "## Required Changes",
+                *[f"- {change}" for change in review.required_changes],
+                "",
+                "## Optional Improvements",
+                *[f"- {change}" for change in review.optional_improvements],
+                "",
+                "## Revision Summary",
+                review.revision_summary,
+                "",
+                "## Review Metadata",
+                f"- Reviewed at: {review.reviewed_at.isoformat()}",
+                f"- Reviewer version: {review.reviewer_version}",
+            ]
+        )
+        return "\n".join(lines) + "\n"
