@@ -104,6 +104,8 @@ def validate_source_availability(timeline: Timeline) -> None:
         if clip.source_type == TimelineAssetSource.PLACEHOLDER and clip.status not in {
             TimelineClipStatus.PLACEHOLDER,
             TimelineClipStatus.REQUIRES_REVIEW,
+            TimelineClipStatus.MISSING,
+            TimelineClipStatus.FAILED,
         }:
             raise TimelineValidationError(f"Clip {clip.clip_id} has an invalid placeholder status.")
         if clip.status != TimelineClipStatus.READY:

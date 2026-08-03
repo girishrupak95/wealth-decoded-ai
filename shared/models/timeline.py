@@ -192,8 +192,10 @@ class TimelineClip(BaseModel):
         if self.source_type == TimelineAssetSource.PLACEHOLDER and self.status not in {
             TimelineClipStatus.PLACEHOLDER,
             TimelineClipStatus.REQUIRES_REVIEW,
+            TimelineClipStatus.MISSING,
+            TimelineClipStatus.FAILED,
         }:
-            raise ValueError("placeholder sources require placeholder or requires_review status")
+            raise ValueError("placeholder sources require a non-ready status")
         return self
 
     @property
