@@ -23,6 +23,12 @@ make format
 
 The API health check is available at `GET /health`.
 
+## Voiceover generation
+
+Voiceover generation uses ElevenLabs through a provider-independent interface and requires an
+approved script review. Configure the `ELEVENLABS_*` variables in `.env`, ensure `ffmpeg` and
+`ffprobe` are available, then run `uv run python apps/api/scripts/run_voiceover_generation.py`.
+
 ## Containers
 
 Start the API and PostgreSQL services with:
