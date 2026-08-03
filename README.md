@@ -1,6 +1,8 @@
 # Wealth Decoded AI
 
-Production-oriented backend foundation for Wealth Decoded AI.
+Production-oriented backend for Wealth Decoded AI. It currently produces validated content,
+review, storyboard, voiceover, and visual-asset packages for a finance-documentary workflow.
+It does **not** yet assemble a final MP4.
 
 ## Prerequisites
 
@@ -22,6 +24,18 @@ make format
 ```
 
 The API health check is available at `GET /health`.
+
+## Architecture
+
+The pipeline is composed through CLI/application scripts, feature services, reusable agents and
+providers, then shared Pydantic models and utilities. See the architecture freeze documents:
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Pipeline](docs/PIPELINE.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Development](docs/DEVELOPMENT.md)
+- [Testing](docs/TESTING.md)
+- [Technical debt](docs/TECHNICAL_DEBT.md)
 
 ## Visual asset packages
 
