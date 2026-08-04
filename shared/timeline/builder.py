@@ -67,11 +67,21 @@ class TimelineBuilderService:
         storyboard: Storyboard,
         voiceover_manifest: VoiceoverManifest,
         visual_asset_manifest: VisualAssetManifest,
+        voiceover_segment_paths: dict[str, Path] | None = None,
     ) -> Timeline:
-        """Map source contracts deterministically into validated production tracks."""
+        """Map source contracts deterministically into validated production tracks.
+
+        ``voiceover_segment_paths`` is optional because the manifest contract stores safe
+        filenames, not package paths. Callers with a persisted voiceover package can provide
+        this explicit mapping to produce ready narration clips without fabricating paths.
+        """
         warnings: list[str] = ["Captions are not yet generated."]
         video_track = self._video_track(storyboard, visual_asset_manifest, warnings)
-        narration_track = self._narration_track(voiceover_manifest, warnings)
+        narration_track = self._narration_track(
+            voiceover_manifest,
+            warnings,
+            voiceover_segment_paths or {},
+        )
         tracks = [video_track, narration_track]
         sound_effect_track = self._sound_effect_track(storyboard)
         if sound_effect_track is not None:
@@ -291,7 +301,12 @@ class TimelineBuilderService:
             )
         return TimelineAssetSource.PLACEHOLDER, TimelineClipStatus.MISSING, None, None, None
 
-    def _narration_track(self, manifest: VoiceoverManifest, warnings: list[str]) -> TimelineTrack:
+    def _narration_track(
+        self,
+        manifest: VoiceoverManifest,
+        warnings: list[str],
+        segment_paths: dict[str, Path],
+    ) -> TimelineTrack:
         cursor = 0.0
         clips: list[TimelineClip] = []
         for segment in sorted(manifest.segments, key=lambda item: item.sequence_number):
@@ -300,7 +315,12 @@ class TimelineBuilderService:
             )
             start = cursor
             end = start + duration
-            warnings.append("Narration audio source is not available.")
+            source_path = segment_paths.get(segment.segment_id)
+            ready = (
+                source_path is not None and source_path.is_file() and source_path.stat().st_size > 0
+            )
+            if not ready:
+                warnings.append("Narration audio source is not available.")
             clips.append(
                 TimelineClip(
                     clip_id=f"narration-{segment.sequence_number:03d}-{segment.segment_id}",
@@ -309,10 +329,13 @@ class TimelineBuilderService:
                     sequence_number=segment.sequence_number,
                     start_time_seconds=start,
                     end_time_seconds=end,
-                    source_type=TimelineAssetSource.PLACEHOLDER,
+                    source_type=(
+                        TimelineAssetSource.LOCAL_FILE if ready else TimelineAssetSource.PLACEHOLDER
+                    ),
+                    source_path=source_path if ready else None,
                     source_script_section_id=segment.script_section_id,
                     source_voice_segment_id=segment.segment_id,
-                    status=TimelineClipStatus.MISSING,
+                    status=TimelineClipStatus.READY if ready else TimelineClipStatus.MISSING,
                     volume=1.0,
                     metadata={
                         "narration_segment_type": segment.segment_type.value,
