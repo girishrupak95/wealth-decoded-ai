@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-from tests.test_timeline_models import clip, timeline
 
 from shared.exceptions.ai import TimelineValidationError
 from shared.models.timeline import (
@@ -27,6 +26,7 @@ from shared.timeline.validation import (
     validate_transitions,
     validate_video_timeline_continuity,
 )
+from tests.test_timeline_models import clip, timeline
 
 
 def test_clip_order_overlap_and_adjacent_clips() -> None:

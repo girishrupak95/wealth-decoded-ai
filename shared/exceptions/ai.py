@@ -33,5 +33,9 @@ class TimelinePersistenceError(Exception):
     """Raised when a timeline production package cannot be persisted safely."""
 
 
+class RenderingValidationError(Exception):
+    """Raised when renderer-independent render contracts are invalid."""
+
+
 class FFmpegUnavailableError(VoiceoverAudioError):
     """Raised when ffmpeg or ffprobe are not available for audio processing."""
