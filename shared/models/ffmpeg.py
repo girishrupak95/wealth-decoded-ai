@@ -82,6 +82,17 @@ class FFmpegStreamMap(BaseModel):
         return self
 
 
+class FFmpegProcessResult(BaseModel):
+    return_code: int | None
+    stdout_tail: str
+    stderr_tail: str
+    elapsed_seconds: float = Field(ge=0)
+    cancelled: bool = False
+    timed_out: bool = False
+    progress_events: list[dict[str, str]] = Field(default_factory=list)
+    log_path: Path | None = None
+
+
 class FFmpegRenderPlan(BaseModel):
     job_id: str = Field(min_length=1)
     executable: str = Field(min_length=1)
