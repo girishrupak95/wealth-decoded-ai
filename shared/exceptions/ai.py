@@ -33,5 +33,25 @@ class TimelinePersistenceError(Exception):
     """Raised when a timeline production package cannot be persisted safely."""
 
 
+class RenderResultPersistenceError(Exception):
+    """Raised when a render result cannot be persisted safely."""
+
+
+class RenderingValidationError(Exception):
+    """Raised when renderer-independent render contracts are invalid."""
+
+
+class FFmpegCommandBuildError(RenderingValidationError):
+    """Raised when a deterministic FFmpeg command plan cannot be constructed safely."""
+
+
+class FFprobeUnavailableError(RenderingValidationError):
+    """Raised when the FFprobe executable or its output is unavailable."""
+
+
+class FFmpegProcessError(RenderingValidationError):
+    """Raised when FFmpeg cannot be launched or exits unsuccessfully."""
+
+
 class FFmpegUnavailableError(VoiceoverAudioError):
     """Raised when ffmpeg or ffprobe are not available for audio processing."""

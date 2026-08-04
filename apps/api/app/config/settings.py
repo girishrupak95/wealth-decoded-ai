@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,24 @@ class VisualAssetSettings(BaseSettings):
     fail_fast: bool = False
     image_model: str = "gpt-image-1"
     image_quality: str | None = None
+
+
+class FFmpegRenderSettings(BaseSettings):
+    """Local FFmpeg render configuration; no provider credentials are required."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    ffmpeg_executable: str = "ffmpeg"
+    ffprobe_executable: str = "ffprobe"
+    render_timeout_seconds: int = Field(default=900, gt=0)
+    render_graceful_termination_seconds: int = Field(default=5, gt=0)
+    ffprobe_timeout_seconds: int = Field(default=30, gt=0)
+    render_output_root: Path | None = None
+    render_font_path: Path | None = None
 
 
 @lru_cache
