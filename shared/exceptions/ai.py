@@ -37,5 +37,9 @@ class RenderingValidationError(Exception):
     """Raised when renderer-independent render contracts are invalid."""
 
 
+class FFmpegCommandBuildError(RenderingValidationError):
+    """Raised when a deterministic FFmpeg command plan cannot be constructed safely."""
+
+
 class FFmpegUnavailableError(VoiceoverAudioError):
     """Raised when ffmpeg or ffprobe are not available for audio processing."""
