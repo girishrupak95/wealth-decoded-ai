@@ -33,6 +33,10 @@ class TimelinePersistenceError(Exception):
     """Raised when a timeline production package cannot be persisted safely."""
 
 
+class RenderResultPersistenceError(Exception):
+    """Raised when a render result cannot be persisted safely."""
+
+
 class RenderingValidationError(Exception):
     """Raised when renderer-independent render contracts are invalid."""
 

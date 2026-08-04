@@ -55,6 +55,21 @@ This command creates a timeline package, not an MP4. Visual generation is manife
 default; valid ElevenLabs credentials are still required to generate narration. A `not_ready`
 timeline package is expected until its visual placeholders are replaced. Its edit-decision list is
 renderer-neutral and is not CMX3600, Premiere XML, Final Cut XML, or OTIO.
+
+## FFmpeg rendering
+
+Render an existing render-ready timeline package without rerunning the content pipeline:
+
+```bash
+uv run python apps/api/scripts/run_video_render.py \
+  --timeline generated/timelines/YYYY-MM-DD/title/timeline.json \
+  --dry-run
+```
+
+Remove `--dry-run` to render. The CLI can also receive `--package` with the directory containing
+`timeline.json`. FFmpeg and FFprobe must be installed, all local source paths must exist, and
+placeholders or missing sources block rendering. Captions are not supported yet. Dry runs validate
+the timeline and build a safe FFmpeg plan without executing FFmpeg or creating a final video.
 ```
 
 Manifest-only mode creates pending AI-image instructions, renders typography locally, creates
