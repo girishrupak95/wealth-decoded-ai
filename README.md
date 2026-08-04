@@ -44,6 +44,17 @@ Generate a visual-asset package in manifest-only mode (the default) with no paid
 ```bash
 VISUAL_ASSET_LIVE_GENERATION=false \
 uv run python apps/api/scripts/run_visual_asset_generation.py
+
+To build a persisted renderer-neutral timeline package from the approved pipeline:
+
+```bash
+uv run python apps/api/scripts/run_timeline_generation.py
+```
+
+This command creates a timeline package, not an MP4. Visual generation is manifest-only by
+default; valid ElevenLabs credentials are still required to generate narration. A `not_ready`
+timeline package is expected until its visual placeholders are replaced. Its edit-decision list is
+renderer-neutral and is not CMX3600, Premiere XML, Final Cut XML, or OTIO.
 ```
 
 Manifest-only mode creates pending AI-image instructions, renders typography locally, creates

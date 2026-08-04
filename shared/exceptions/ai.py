@@ -25,5 +25,13 @@ class VisualAssetPersistenceError(Exception):
     """Raised when a visual asset package cannot be persisted safely."""
 
 
+class TimelineValidationError(Exception):
+    """Raised when a renderer-independent production timeline is invalid."""
+
+
+class TimelinePersistenceError(Exception):
+    """Raised when a timeline production package cannot be persisted safely."""
+
+
 class FFmpegUnavailableError(VoiceoverAudioError):
     """Raised when ffmpeg or ffprobe are not available for audio processing."""
