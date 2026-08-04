@@ -6,6 +6,7 @@ from agents.script_agent.prompt import build_script_request
 from shared.ai.base_agent import BaseAgent
 from shared.constants import SCRIPT_AGENT_NAME
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 
@@ -28,9 +29,12 @@ class ScriptAgent(BaseAgent):
         concept: VideoConcept,
         research: ResearchPackage,
         quality_feedback: str | None = None,
+        policy: ScriptLengthPolicy | None = None,
     ) -> VideoScript:
         """Return a validated script without persisting it."""
-        execution = await self.execute(build_script_request(concept, research, quality_feedback))
+        execution = await self.execute(
+            build_script_request(concept, research, quality_feedback, policy)
+        )
         script = VideoScript.model_validate(execution.output)
         unverified_sources = {
             reference

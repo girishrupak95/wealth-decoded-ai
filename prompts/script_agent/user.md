@@ -12,6 +12,10 @@ Corrective feedback from prior validation, if any:
 
 $quality_feedback
 
+Requested script-length policy:
+
+$script_length_policy
+
 Wealth Decoded knowledge base:
 
 $knowledge

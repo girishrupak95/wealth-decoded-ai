@@ -47,6 +47,7 @@ from shared.exceptions.ai import (
     VoiceoverAudioError,
     VoiceoverProviderError,
 )
+from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.script_review import ScriptReview
 from shared.models.timeline import TimelinePersistenceResult
 from shared.timeline.builder import TimelineBuilderService
@@ -101,11 +102,23 @@ class PipelineDependencies:
     visual_settings: VisualAssetSettings
 
 
-def build_dependencies(root: Path) -> PipelineDependencies:
+def build_dependencies(
+    root: Path,
+    *,
+    script_policy: ScriptLengthPolicy | None = None,
+    visual_live_generation: bool | None = None,
+) -> PipelineDependencies:
     """Construct dependencies without executing services, inspecting media, or creating files."""
     openai_settings = OpenAISettings()
     elevenlabs_settings = ElevenLabsSettings()
     visual_settings = VisualAssetSettings()
+    if visual_live_generation is not None:
+        visual_settings = visual_settings.model_copy(
+            update={
+                "live_generation": visual_live_generation,
+                "max_live_images": visual_settings.max_live_images if visual_live_generation else 0,
+            }
+        )
     client = OpenAIClient(openai_settings)
     voice_provider = ElevenLabsTextToSpeechProvider(elevenlabs_settings)
     prompt_loader = PromptLoader(root / "prompts")
@@ -163,6 +176,7 @@ def build_dependencies(root: Path) -> PipelineDependencies:
                 output_validator=validator,
             ),
             generated_root / SCRIPTS_DIRECTORY_NAME,
+            policy=script_policy,
         ),
         review_service=ScriptReviewService(
             ReviewerAgent(
@@ -172,6 +186,7 @@ def build_dependencies(root: Path) -> PipelineDependencies:
                 output_validator=validator,
             ),
             generated_root / REVIEWS_DIRECTORY_NAME,
+            policy=script_policy,
         ),
         storyboard_service=StoryboardGenerationService(
             StoryboardAgent(
