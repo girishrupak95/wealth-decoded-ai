@@ -13,12 +13,9 @@ from pydantic import BaseModel
 from shared.constants import (
     JSON_FILE_SUFFIX,
     MARKDOWN_FILE_SUFFIX,
-    REVIEW_MAX_DURATION_SECONDS,
-    REVIEW_MAX_WORDS,
-    REVIEW_MIN_DURATION_SECONDS,
-    REVIEW_MIN_WORDS,
 )
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.script_review import ReviewFinding, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
@@ -42,9 +39,16 @@ class ScriptReviewArtifacts(BaseModel):
 class ScriptReviewService:
     """Merge deterministic safeguards with an injected editorial reviewer."""
 
-    def __init__(self, reviewer_agent: EditorialReviewer, output_root: Path) -> None:
+    def __init__(
+        self,
+        reviewer_agent: EditorialReviewer,
+        output_root: Path,
+        *,
+        policy: ScriptLengthPolicy | None = None,
+    ) -> None:
         self._reviewer_agent = reviewer_agent
         self._output_root = output_root
+        self._policy = policy or ScriptLengthPolicy()
         self._logger = logger.bind(component=self.__class__.__name__)
 
     async def review(
@@ -79,7 +83,7 @@ class ScriptReviewService:
 
     def _precheck(self, script: VideoScript) -> list[ReviewFinding]:
         findings: list[ReviewFinding] = []
-        if not REVIEW_MIN_WORDS <= script.estimated_word_count <= REVIEW_MAX_WORDS:
+        if not self._policy.min_words <= script.estimated_word_count <= self._policy.max_words:
             findings.append(
                 self._finding(
                     "duration",
@@ -87,13 +91,14 @@ class ScriptReviewService:
                     None,
                     "Script word count is outside the production range.",
                     str(script.estimated_word_count),
-                    "Revise narration to 600-900 spoken words.",
+                    "Revise narration to "
+                    f"{self._policy.min_words}-{self._policy.max_words} spoken words.",
                 )
             )
         if (
-            not REVIEW_MIN_DURATION_SECONDS
+            not self._policy.min_duration_seconds
             <= script.total_estimated_duration_seconds
-            <= REVIEW_MAX_DURATION_SECONDS
+            <= self._policy.max_duration_seconds
         ):
             findings.append(
                 self._finding(

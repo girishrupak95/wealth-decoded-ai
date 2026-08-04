@@ -10,6 +10,7 @@ from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
 from shared.exceptions.ai import OutputValidationError
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import short_production_fixture_policy
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 
@@ -117,7 +118,8 @@ def make_agent(tmp_path: Path, response: str) -> tuple[ScriptAgent, MockLLMClien
     prompt_directory.mkdir(parents=True)
     (prompt_directory / "system.md").write_text("Return JSON only.", encoding="utf-8")
     (prompt_directory / "user.md").write_text(
-        "Concept: $video_concept\nResearch: $research_package", encoding="utf-8"
+        "Concept: $video_concept\nResearch: $research_package\nPolicy: $script_length_policy",
+        encoding="utf-8",
     )
     knowledge_root = tmp_path / "knowledge"
     knowledge_root.mkdir()
@@ -143,6 +145,19 @@ async def test_script_agent_returns_validated_video_script(tmp_path: Path) -> No
     assert len(script.sections) == 3
     assert client.request is not None
     assert "Emergency Fund Blueprint" in client.request.template
+
+
+@pytest.mark.asyncio
+async def test_script_agent_includes_explicit_length_policy_in_prompt_context(
+    tmp_path: Path,
+) -> None:
+    agent, client = make_agent(tmp_path, json.dumps(script_payload()))
+
+    await agent.generate(make_concept(), make_research(), policy=short_production_fixture_policy())
+
+    assert client.request is not None
+    assert "production_fixture_short" in client.request.template
+    assert '"min_words": 75' in client.request.template
 
 
 @pytest.mark.asyncio

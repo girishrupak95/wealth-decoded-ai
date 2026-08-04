@@ -5,7 +5,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from loguru import logger
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from shared.constants import (
     MARKDOWN_FILE_SUFFIX,
 )
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
 
@@ -34,6 +35,20 @@ class ScriptGenerator(Protocol):
         quality_feedback: str | None = None,
     ) -> VideoScript:
         """Return a validated video script."""
+        ...
+
+
+class PolicyAwareScriptGenerator(ScriptGenerator, Protocol):
+    """Extended agent contract used only when callers explicitly supply a policy."""
+
+    async def generate(
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        quality_feedback: str | None = None,
+        policy: ScriptLengthPolicy | None = None,
+    ) -> VideoScript:
+        """Return a validated script with policy-aware prompt context."""
         ...
 
 
@@ -62,12 +77,13 @@ class ScriptGenerationService:
         max_retries: int = DEFAULT_SCRIPT_MAX_RETRIES,
         words_per_minute: int = DEFAULT_SCRIPT_WORDS_PER_MINUTE,
         visual_pause_seconds: int = DEFAULT_SCRIPT_VISUAL_PAUSE_SECONDS,
+        policy: ScriptLengthPolicy | None = None,
     ) -> None:
         self._script_agent = script_agent
         self._output_root = output_root
         self._enforce_production_length = enforce_production_length
-        self._min_words = min_words
-        self._max_words = max_words
+        self._policy = policy or ScriptLengthPolicy(min_words=min_words, max_words=max_words)
+        self._uses_explicit_policy = policy is not None
         self._max_retries = max_retries
         self._words_per_minute = words_per_minute
         self._visual_pause_seconds = visual_pause_seconds
@@ -108,7 +124,7 @@ class ScriptGenerationService:
     ) -> VideoScript:
         feedback: str | None = None
         for attempt in range(self._max_retries + 1):
-            script = await self._script_agent.generate(concept, research, feedback)
+            script = await self._generate_from_agent(concept, research, feedback)
             normalized = script.with_derived_metrics(
                 words_per_minute=self._words_per_minute,
                 visual_pause_seconds=self._visual_pause_seconds,
@@ -120,18 +136,37 @@ class ScriptGenerationService:
         raise ValueError("Script failed production length validation after bounded retries.")
 
     def _is_production_length(self, script: VideoScript) -> bool:
-        return self._min_words <= script.estimated_word_count <= self._max_words
+        return (
+            self._policy.min_words <= script.estimated_word_count <= self._policy.max_words
+            and self._policy.min_duration_seconds
+            <= script.total_estimated_duration_seconds
+            <= self._policy.max_duration_seconds
+        )
 
     def _length_feedback(self, word_count: int) -> str:
-        if word_count < self._min_words:
+        if word_count < self._policy.min_words:
             return (
-                f"Expand narration to at least {self._min_words} words "
+                f"Expand narration to at least {self._policy.min_words} words "
+                "using supplied research only."
+            )
+        if word_count > self._policy.max_words:
+            return (
+                f"Condense narration to no more than {self._policy.max_words} words "
                 "using supplied research only."
             )
         return (
-            f"Condense narration to no more than {self._max_words} words "
-            "using supplied research only."
+            "Adjust narration pacing to keep the calculated duration between "
+            f"{self._policy.min_duration_seconds} and {self._policy.max_duration_seconds} seconds."
         )
+
+    async def _generate_from_agent(
+        self, concept: VideoConcept, research: ResearchPackage, feedback: str | None
+    ) -> VideoScript:
+        """Preserve legacy agent calls unless an explicit policy needs prompt context."""
+        if self._uses_explicit_policy:
+            policy_aware_agent = cast(PolicyAwareScriptGenerator, self._script_agent)
+            return await policy_aware_agent.generate(concept, research, feedback, self._policy)
+        return await self._script_agent.generate(concept, research, feedback)
 
     @staticmethod
     def _artifact_paths(directory: Path, title: str) -> tuple[Path, Path]:
