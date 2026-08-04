@@ -274,7 +274,7 @@ class FFmpegCommandBuilder:
             labels.append(label)
         if not labels:
             raise FFmpegCommandBuildError("FFmpeg plan requires narration audio.")
-        mix = labels[0] if len(labels) == 1 else "amix=" + str(len(labels)) + ":normalize=0"
+        mix = "anull" if len(labels) == 1 else "amix=" + str(len(labels)) + ":normalize=0"
         nodes.append(
             FFmpegFilterNode(
                 node_id="afinalize",

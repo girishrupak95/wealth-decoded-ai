@@ -65,3 +65,6 @@ addopts = "-ra"
 asyncio_mode = "auto"
 testpaths = ["agents", "tests"]
 pythonpath = [".", "apps/api"]
+markers = [
+    "integration: optional tests that execute local FFmpeg and ffprobe",
+]

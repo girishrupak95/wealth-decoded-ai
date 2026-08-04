@@ -70,6 +70,22 @@ Remove `--dry-run` to render. The CLI can also receive `--package` with the dire
 `timeline.json`. FFmpeg and FFprobe must be installed, all local source paths must exist, and
 placeholders or missing sources block rendering. Captions are not supported yet. Dry runs validate
 the timeline and build a safe FFmpeg plan without executing FFmpeg or creating a final video.
+
+## Offline FFmpeg demo
+
+Generate and render a local smoke-test package with no API keys or internet access:
+
+```bash
+uv run python apps/api/scripts/run_demo_render.py
+uv run python apps/api/scripts/run_demo_render.py --dry-run
+```
+
+The demo writes ignored files under `generated/demo/`. Its audio is synthesized locally rather
+than human narration. To run the optional real FFmpeg integration test:
+
+```bash
+RUN_FFMPEG_INTEGRATION=1 uv run pytest -m integration -q
+```
 ```
 
 Manifest-only mode creates pending AI-image instructions, renders typography locally, creates
