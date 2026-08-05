@@ -4,8 +4,9 @@ import asyncio
 import json
 import re
 from datetime import UTC, datetime
+from inspect import Parameter, signature
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from loguru import logger
 from pydantic import BaseModel
@@ -29,6 +30,20 @@ class EditorialReviewer(Protocol):
         ...
 
 
+class PolicyAwareEditorialReviewer(EditorialReviewer, Protocol):
+    """Extended reviewer contract used only when an active policy is explicitly supplied."""
+
+    async def review(
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        script: VideoScript,
+        policy: ScriptLengthPolicy | None = None,
+    ) -> ScriptReview:
+        """Return an editorial review aligned with the active script policy."""
+        ...
+
+
 class ScriptReviewArtifacts(BaseModel):
     review: ScriptReview
     generated_at: datetime
@@ -49,6 +64,7 @@ class ScriptReviewService:
         self._reviewer_agent = reviewer_agent
         self._output_root = output_root
         self._policy = policy or ScriptLengthPolicy()
+        self._uses_explicit_policy = policy is not None
         self._logger = logger.bind(component=self.__class__.__name__)
 
     async def review(
@@ -60,7 +76,7 @@ class ScriptReviewService:
     ) -> ScriptReviewArtifacts:
         timestamp = reviewed_at or datetime.now(UTC)
         deterministic = self._precheck(script)
-        editorial = await self._reviewer_agent.review(concept, research, script)
+        editorial = await self._review(concept, research, script)
         merged = self._merge(script, editorial, deterministic, timestamp)
         directory = self._output_root / timestamp.date().isoformat()
         await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
@@ -79,6 +95,26 @@ class ScriptReviewService:
             generated_at=timestamp,
             json_path=json_path,
             markdown_path=markdown_path,
+        )
+
+    async def _review(
+        self, concept: VideoConcept, research: ResearchPackage, script: VideoScript
+    ) -> ScriptReview:
+        if not self._uses_explicit_policy:
+            return await self._reviewer_agent.review(concept, research, script)
+        if self._accepts_policy():
+            policy_aware_reviewer = cast(PolicyAwareEditorialReviewer, self._reviewer_agent)
+            return await policy_aware_reviewer.review(concept, research, script, self._policy)
+        return await self._reviewer_agent.review(concept, research, script)
+
+    def _accepts_policy(self) -> bool:
+        try:
+            parameters = signature(self._reviewer_agent.review).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        return any(
+            parameter.name == "policy" or parameter.kind is Parameter.VAR_KEYWORD
+            for parameter in parameters
         )
 
     def _precheck(self, script: VideoScript) -> list[ReviewFinding]:

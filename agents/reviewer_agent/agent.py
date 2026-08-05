@@ -6,6 +6,7 @@ from agents.reviewer_agent.prompt import build_reviewer_request
 from shared.ai.base_agent import BaseAgent
 from shared.constants import REVIEWER_AGENT_NAME
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.script_review import ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
@@ -21,7 +22,11 @@ class ReviewerAgent(BaseAgent):
         return ScriptReview
 
     async def review(
-        self, concept: VideoConcept, research: ResearchPackage, script: VideoScript
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        script: VideoScript,
+        policy: ScriptLengthPolicy | None = None,
     ) -> ScriptReview:
-        execution = await self.execute(build_reviewer_request(concept, research, script))
+        execution = await self.execute(build_reviewer_request(concept, research, script, policy))
         return ScriptReview.model_validate(execution.output)

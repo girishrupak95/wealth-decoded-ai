@@ -5,6 +5,7 @@ import pytest
 
 from agents.reviewer_agent.service import ScriptReviewService
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import ScriptLengthPolicy, short_production_fixture_policy
 from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
@@ -69,9 +70,17 @@ def script(
 
 
 class MockReviewer:
+    def __init__(self) -> None:
+        self.policy: ScriptLengthPolicy | None = None
+
     async def review(
-        self, concept: VideoConcept, research: ResearchPackage, script: VideoScript
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        script: VideoScript,
+        policy: ScriptLengthPolicy | None = None,
     ) -> ScriptReview:
+        self.policy = policy
         scores = ReviewScores(
             hook_score=9,
             accuracy_score=9,
@@ -129,3 +138,17 @@ async def test_duplicate_sentence_and_collision_are_handled(tmp_path: Path) -> N
     )
     assert any(f.category == "repetition" for f in first.review.findings)
     assert first.json_path != second.json_path
+
+
+@pytest.mark.asyncio
+async def test_short_policy_is_passed_to_reviewer_and_approves_compliant_script(
+    tmp_path: Path,
+) -> None:
+    reviewer = MockReviewer()
+    policy = short_production_fixture_policy()
+    artifacts = await ScriptReviewService(reviewer, tmp_path, policy=policy).review(
+        concept(), research(), script("word " * 24), datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert reviewer.policy is policy
+    assert artifacts.review.approved

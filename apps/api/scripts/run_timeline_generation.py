@@ -157,7 +157,8 @@ def build_dependencies(
                 prompt_loader=prompt_loader,
                 knowledge_loader=knowledge_loader,
                 output_validator=validator,
-            )
+            ),
+            policy=script_policy,
         ),
         research_service=ResearchService(
             ResearchAgent(

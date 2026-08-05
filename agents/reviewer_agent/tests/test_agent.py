@@ -9,14 +9,12 @@ from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import short_production_fixture_policy
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
 
 
 class MockLLM(LLMClient):
-    async def generate(self, request: LLMRequest) -> str:
-        return self.value
-
     async def health(self) -> bool:
         return True
 
@@ -26,6 +24,11 @@ class MockLLM(LLMClient):
     def __init__(self, value: str) -> None:
         super().__init__()
         self.value = value
+        self.request: LLMRequest | None = None
+
+    async def generate(self, request: LLMRequest) -> str:
+        self.request = request
+        return self.value
 
 
 @pytest.mark.asyncio
@@ -34,7 +37,9 @@ async def test_reviewer_agent_validates_llm_response(tmp_path: Path) -> None:
     prompts.mkdir(parents=True)
     (prompts / "system.md").write_text("JSON", encoding="utf-8")
     (prompts / "user.md").write_text(
-        "$video_concept $research_package $video_script", encoding="utf-8"
+        "$video_concept $research_package $video_script "
+        "$script_length_policy $review_format_guidance",
+        encoding="utf-8",
     )
     knowledge = tmp_path / "knowledge"
     knowledge.mkdir()
@@ -60,8 +65,9 @@ async def test_reviewer_agent_validates_llm_response(tmp_path: Path) -> None:
             "reviewer_version": "1",
         }
     )
+    client = MockLLM(response)
     agent = ReviewerAgent(
-        llm_client=MockLLM(response),
+        llm_client=client,
         prompt_loader=PromptLoader(tmp_path / "prompts"),
         knowledge_loader=KnowledgeLoader(knowledge),
         output_validator=OutputValidator(),
@@ -113,3 +119,15 @@ async def test_reviewer_agent_validates_llm_response(tmp_path: Path) -> None:
         verification_notes=[],
     )
     assert not (await agent.review(concept, research, script)).approved
+    assert client.request is not None
+    assert '"profile_name": "long_form"' in client.request.template
+    assert "judge this script within 600-900 spoken words" in client.request.template
+
+    await agent.review(concept, research, script, short_production_fixture_policy())
+
+    assert client.request is not None
+    assert "75-110 spoken words" in client.request.template
+    assert "30-45 seconds" in client.request.template
+    assert "Never require it to exceed these maximums" in client.request.template
+    assert "omitted secondary research questions" in client.request.template
+    assert "overrides conflicting duration guidance in concept metadata" in client.request.template
