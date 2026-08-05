@@ -11,6 +11,15 @@ from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 
 
+class ScriptSourceReferenceError(ValueError):
+    """Raised when a generated script cites a reference absent from its research package."""
+
+    def __init__(self, script: VideoScript, invalid_references: set[str]) -> None:
+        super().__init__("Script contains section sources absent from the research package.")
+        self.script = script
+        self.invalid_references = invalid_references
+
+
 class ScriptAgent(BaseAgent):
     """Generate a validated video script from concept and research inputs."""
 
@@ -42,10 +51,6 @@ class ScriptAgent(BaseAgent):
             for reference in section.source_references
             if reference not in research.references
         }
-        if unverified_sources and any(
-            not section.verification_required
-            and any(reference in unverified_sources for reference in section.source_references)
-            for section in script.sections
-        ):
-            raise ValueError("Script contains section sources absent from the research package.")
+        if unverified_sources:
+            raise ScriptSourceReferenceError(script, unverified_sources)
         return script

@@ -4,8 +4,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from agents.script_agent.agent import ScriptSourceReferenceError
 from agents.script_agent.service import ScriptGenerationService
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import short_production_fixture_policy
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import (
     ScriptSection,
@@ -226,3 +228,51 @@ async def test_service_fails_after_bounded_retry_limit(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="production length"):
         await service.generate(make_concept(), make_research())
+
+
+class PolicyAwareSequencedScriptGenerator:
+    def __init__(self, results: list[VideoScript | ScriptSourceReferenceError]) -> None:
+        self._results = results
+        self.feedback: list[str | None] = []
+
+    async def generate(
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        quality_feedback: str | None = None,
+        policy: object | None = None,
+    ) -> VideoScript:
+        self.feedback.append(quality_feedback)
+        result = self._results.pop(0)
+        if isinstance(result, ScriptSourceReferenceError):
+            raise result
+        return result
+
+
+@pytest.mark.asyncio
+async def test_service_combines_source_and_length_corrections_in_one_retry(tmp_path: Path) -> None:
+    invalid_script = make_script_with_narration("word " * 220)
+    generator = PolicyAwareSequencedScriptGenerator(
+        [
+            ScriptSourceReferenceError(invalid_script, {"Altered Federal Reserve reference"}),
+            make_script_with_narration("word " * 28),
+        ]
+    )
+    service = ScriptGenerationService(
+        generator,
+        tmp_path,
+        policy=short_production_fixture_policy(),
+        max_retries=1,
+    )
+
+    artifacts = await service.generate(make_concept(), make_research())
+
+    assert 75 <= artifacts.script.estimated_word_count <= 110
+    feedback = generator.feedback[1]
+    assert feedback is not None
+    assert "Altered Federal Reserve reference" in feedback
+    assert "Consumer finance guidance" in feedback
+    assert "character-for-character" in feedback
+    assert "Calculated word count:" in feedback
+    assert "Required word range: 75-110" in feedback
+    assert "Required duration range: 30-45 seconds" in feedback

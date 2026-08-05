@@ -10,6 +10,7 @@ from typing import Protocol, cast
 from loguru import logger
 from pydantic import BaseModel
 
+from agents.script_agent.agent import ScriptSourceReferenceError
 from shared.constants import (
     DEFAULT_SCRIPT_MAX_RETRIES,
     DEFAULT_SCRIPT_MAX_WORDS,
@@ -124,15 +125,31 @@ class ScriptGenerationService:
     ) -> VideoScript:
         feedback: str | None = None
         for attempt in range(self._max_retries + 1):
-            script = await self._generate_from_agent(concept, research, feedback)
+            source_feedback: str | None = None
+            try:
+                script = await self._generate_from_agent(concept, research, feedback)
+            except ScriptSourceReferenceError as error:
+                script = error.script
+                source_feedback = self._source_feedback(
+                    error.invalid_references, research.references
+                )
             normalized = script.with_derived_metrics(
                 words_per_minute=self._words_per_minute,
                 visual_pause_seconds=self._visual_pause_seconds,
             )
-            if not self._enforce_production_length or self._is_production_length(normalized):
+            length_feedback = (
+                None
+                if not self._enforce_production_length or self._is_production_length(normalized)
+                else self._length_feedback(normalized)
+            )
+            if source_feedback is None and length_feedback is None:
                 return normalized
-            feedback = self._length_feedback(normalized.estimated_word_count)
-            self._logger.warning("script_length_rejected", attempt=attempt, feedback=feedback)
+            feedback = "\n\n".join(
+                correction
+                for correction in (source_feedback, length_feedback)
+                if correction is not None
+            )
+            self._logger.warning("script_generation_rejected", attempt=attempt)
         raise ValueError("Script failed production length validation after bounded retries.")
 
     def _is_production_length(self, script: VideoScript) -> bool:
@@ -143,20 +160,23 @@ class ScriptGenerationService:
             <= self._policy.max_duration_seconds
         )
 
-    def _length_feedback(self, word_count: int) -> str:
-        if word_count < self._policy.min_words:
-            return (
-                f"Expand narration to at least {self._policy.min_words} words "
-                "using supplied research only."
-            )
-        if word_count > self._policy.max_words:
-            return (
-                f"Condense narration to no more than {self._policy.max_words} words "
-                "using supplied research only."
-            )
+    def _length_feedback(self, script: VideoScript) -> str:
         return (
-            "Adjust narration pacing to keep the calculated duration between "
-            f"{self._policy.min_duration_seconds} and {self._policy.max_duration_seconds} seconds."
+            "Rewrite the entire script within the active policy. Calculated word count: "
+            f"{script.estimated_word_count}. Calculated duration: "
+            f"{script.total_estimated_duration_seconds} seconds. Required word range: "
+            f"{self._policy.min_words}-{self._policy.max_words}. Required duration range: "
+            f"{self._policy.min_duration_seconds}-{self._policy.max_duration_seconds} seconds."
+        )
+
+    @staticmethod
+    def _source_feedback(invalid_references: set[str], allowed_references: list[str]) -> str:
+        return (
+            "Source-reference correction required. Invalid references returned: "
+            f"{sorted(invalid_references)}. ALLOWED_SOURCE_REFERENCES: {allowed_references}. "
+            "Copy allowed references character-for-character. Do not rename, shorten, alter URLs, "
+            "or cite internal research fields. If no exact reference applies, use [] and set "
+            "verification_required=true."
         )
 
     async def _generate_from_agent(
