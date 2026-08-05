@@ -35,9 +35,16 @@ from shared.models.rendering import (
     RenderSettings,
     RenderVideoCodec,
 )
+from shared.models.research import ResearchPackage
 from shared.models.script_policy import short_production_fixture_policy
+from shared.models.script_review import ScriptReview
+from shared.models.storyboard import Storyboard
 from shared.models.timeline import RenderReadiness as TimelineRenderReadiness
 from shared.models.timeline import Timeline
+from shared.models.topic import TopicCandidate
+from shared.models.video_concept import VideoConcept
+from shared.models.video_script import VideoScript
+from shared.models.visual_assets import VisualAssetManifest
 from shared.models.voiceover import VoiceoverManifest
 from shared.rendering.ffmpeg_commands import FFmpegCommandBuilder
 from shared.rendering.ffmpeg_process import FFmpegProcessRunner
@@ -134,7 +141,17 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-images", action="store_true")
     parser.add_argument("--resume-from", choices=FIXTURE_STAGES[1:])
-    parser.add_argument("--output-root", type=Path, default=Path("generated/production-fixture"))
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("generated/production-fixture"),
+        help="Parent directory for a new collision-safe run; ignored when --run-directory is used.",
+    )
+    parser.add_argument(
+        "--run-directory",
+        type=Path,
+        help="Existing run directory required for --resume-from.",
+    )
     return parser.parse_args(arguments)
 
 
@@ -164,32 +181,80 @@ def create_run_directory(output_root: Path, timestamp: datetime | None = None) -
             index += 1
 
 
-def load_resume_artifacts(run_directory: Path, resume_from: str) -> dict[str, object]:
+def load_resume_artifacts(run_directory: Path, resume_from: str) -> dict[str, BaseModel]:
     """Validate artifacts required before a resumed stage; never trust raw JSON blindly."""
-    from shared.models.script_review import ScriptReview
-    from shared.models.topic import TopicCandidate
-    from shared.models.video_concept import VideoConcept
     from shared.models.video_script import VideoScript
 
-    models: dict[str, tuple[str, type[BaseModel]]] = {
-        "concept": ("topic.json", TopicCandidate),
-        "research": ("concept.json", VideoConcept),
-        "script": ("concept.json", VideoConcept),
-        "review": ("script.json", VideoScript),
-        "storyboard": ("concept.json", VideoConcept),
-        "voiceover": ("review.json", ScriptReview),
-        "visuals": ("review.json", ScriptReview),
-        "timeline": ("review.json", ScriptReview),
-        "render": ("timeline/timeline.json", Timeline),
+    required: dict[str, tuple[tuple[str, type[BaseModel]], ...]] = {
+        "concept": (("topic.json", TopicCandidate),),
+        "research": (("topic.json", TopicCandidate), ("concept.json", VideoConcept)),
+        "script": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+        ),
+        "review": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+            ("script.json", VideoScript),
+        ),
+        "storyboard": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+            ("script.json", VideoScript),
+            ("review.json", ScriptReview),
+        ),
+        "voiceover": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+            ("script.json", VideoScript),
+            ("review.json", ScriptReview),
+            ("storyboard.json", Storyboard),
+        ),
+        "visuals": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+            ("script.json", VideoScript),
+            ("review.json", ScriptReview),
+            ("storyboard.json", Storyboard),
+            ("voiceover.json", VoiceoverManifest),
+        ),
+        "timeline": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+            ("script.json", VideoScript),
+            ("review.json", ScriptReview),
+            ("storyboard.json", Storyboard),
+            ("voiceover.json", VoiceoverManifest),
+            ("visuals.json", VisualAssetManifest),
+        ),
+        "render": (
+            ("topic.json", TopicCandidate),
+            ("concept.json", VideoConcept),
+            ("research.json", ResearchPackage),
+            ("script.json", VideoScript),
+            ("review.json", ScriptReview),
+            ("storyboard.json", Storyboard),
+            ("voiceover.json", VoiceoverManifest),
+            ("visuals.json", VisualAssetManifest),
+            ("timeline/timeline.json", Timeline),
+        ),
     }
-    filename, model = models[resume_from]
-    path = run_directory / filename
-    if not path.is_file():
-        raise ProductionFixtureError(f"Resume requires validated artifact: {filename}")
-    try:
-        return {filename: model.model_validate_json(path.read_text(encoding="utf-8"))}
-    except (OSError, ValidationError) as error:
-        raise ProductionFixtureError(f"Resume artifact is invalid: {filename}") from error
+    artifacts: dict[str, BaseModel] = {}
+    for filename, model in required[resume_from]:
+        path = run_directory / filename
+        if not path.is_file():
+            raise ProductionFixtureError(f"Missing validated artifact: {filename}")
+        try:
+            artifacts[filename] = model.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValidationError) as error:
+            raise ProductionFixtureError(f"Validated artifact is invalid: {filename}") from error
+    return artifacts
 
 
 def build_production_dependencies(
@@ -198,12 +263,15 @@ def build_production_dependencies(
     """Build existing services with only the explicit short-form policy overridden."""
     timeline_cli = importlib.import_module("apps.api.scripts.run_timeline_generation")
     dependency_factory = cast(Callable[..., PipelineServices], timeline_cli.build_dependencies)
+    policy = short_production_fixture_policy()
+    editorial_constraints = list(FIXTURE_EDITORIAL_CONSTRAINTS)
     pipeline = dependency_factory(
         root,
-        script_policy=short_production_fixture_policy(),
+        script_policy=policy,
         visual_live_generation=False if skip_images else None,
-        include_disclaimer_in_audio=False,
-        script_editorial_constraints=list(FIXTURE_EDITORIAL_CONSTRAINTS),
+        include_disclaimer_in_audio=policy.include_disclaimer_in_spoken_count,
+        script_editorial_constraints=editorial_constraints,
+        reviewer_editorial_constraints=editorial_constraints,
     )
     settings = FFmpegRenderSettings()
     builder = FFmpegCommandBuilder(
@@ -225,70 +293,117 @@ def build_production_dependencies(
 
 
 async def run_pipeline(
-    dependencies: ProductionDependencies, run_directory: Path, *, skip_images: bool
+    dependencies: ProductionDependencies,
+    run_directory: Path,
+    *,
+    skip_images: bool,
+    resume_from: str | None = None,
+    resume_artifacts: dict[str, BaseModel] | None = None,
 ) -> int:
     """Invoke existing services in their required order and stop on the first failure."""
     started = perf_counter()
     pipeline = dependencies.pipeline
-    topic = await _stage(1, "Topic generation", pipeline.topic_service.discover(FIXTURE_TOPIC))
-    selected_topic = topic[0]
-    _write_model(run_directory / "topic.json", selected_topic)
-    concept = await _stage(
-        2, "Concept generation", pipeline.concept_service.generate(selected_topic)
-    )
-    _write_model(run_directory / "concept.json", concept)
-    research_artifacts = await _stage(
-        3, "Research generation", pipeline.research_service.generate(concept)
-    )
-    _write_model(run_directory / "research.json", research_artifacts.research)
-    script_artifacts = await _stage(
-        4,
-        "Initial script generation",
-        pipeline.script_service.generate(concept, research_artifacts.research),
-    )
-    _write_model(run_directory / "script-initial.json", script_artifacts.script)
-    _write_model(run_directory / "script.json", script_artifacts.script)
-    review_artifacts = await _stage(
-        5,
-        "Initial script review",
-        pipeline.review_service.review(
-            concept, research_artifacts.research, script_artifacts.script
-        ),
-    )
-    _write_model(run_directory / "review-initial.json", review_artifacts.review)
-    _write_model(run_directory / "review.json", review_artifacts.review)
+    resume_index = FIXTURE_STAGES.index(resume_from) if resume_from is not None else 0
+    artifacts = resume_artifacts or {}
+
+    def is_reused(stage: str) -> bool:
+        return resume_from is not None and FIXTURE_STAGES.index(stage) < resume_index
+
+    def artifact[ArtifactModel: BaseModel](
+        filename: str, model: type[ArtifactModel]
+    ) -> ArtifactModel:
+        value = artifacts.get(filename)
+        if not isinstance(value, model):
+            raise ProductionFixtureError(f"Missing validated artifact: {filename}")
+        return value
+
+    if is_reused("topic"):
+        topic = artifact("topic.json", TopicCandidate)
+        _reused_stage(1, "Topic generation")
+    else:
+        topics = await pipeline.topic_service.discover(FIXTURE_TOPIC)
+        topic = topics[0]
+        print_stage_update(
+            1, "Topic generation", "completed", "completed", perf_counter() - started
+        )
+        _write_model(run_directory / "topic.json", topic)
+
+    if is_reused("concept"):
+        concept = artifact("concept.json", VideoConcept)
+        _reused_stage(2, "Concept generation")
+    else:
+        concept = await _stage(2, "Concept generation", pipeline.concept_service.generate(topic))
+        _write_model(run_directory / "concept.json", concept)
+
+    if is_reused("research"):
+        research = artifact("research.json", ResearchPackage)
+        _reused_stage(3, "Research generation")
+    else:
+        research_artifacts = await _stage(
+            3, "Research generation", pipeline.research_service.generate(concept)
+        )
+        research = research_artifacts.research
+        _write_model(run_directory / "research.json", research)
+
+    if is_reused("script"):
+        generated_script = artifact("script.json", VideoScript)
+        _reused_stage(4, "Script generation")
+    else:
+        script_artifacts = await _stage(
+            4,
+            "Initial script generation",
+            pipeline.script_service.generate(concept, research),
+        )
+        generated_script = script_artifacts.script
+        _write_model(run_directory / "script-initial.json", generated_script)
+        _write_model(run_directory / "script.json", generated_script)
+
+    if is_reused("review"):
+        reviewed_script = artifact("review.json", ScriptReview)
+        _reused_stage(5, "Script review")
+    else:
+        review_artifacts = await _stage(
+            5,
+            "Initial script review",
+            pipeline.review_service.review(concept, research, generated_script),
+        )
+        reviewed_script = review_artifacts.review
+        _write_model(run_directory / "review-initial.json", reviewed_script)
+        _write_model(run_directory / "review.json", reviewed_script)
+
     revised = False
-    if not review_artifacts.review.approved:
+    allow_revision = resume_from is None or resume_index <= FIXTURE_STAGES.index("script")
+    if not reviewed_script.approved and allow_revision:
         script_artifacts = await _stage(
             6,
             "Editorial revision",
             pipeline.script_service.generate_revision(
                 concept,
-                research_artifacts.research,
-                script_artifacts.script,
-                review_artifacts.review,
+                research,
+                generated_script,
+                reviewed_script,
             ),
         )
         revised = True
-        _write_model(run_directory / "script-revised.json", script_artifacts.script)
-        _write_model(run_directory / "script.json", script_artifacts.script)
+        generated_script = script_artifacts.script
+        _write_model(run_directory / "script-revised.json", generated_script)
+        _write_model(run_directory / "script.json", generated_script)
         review_artifacts = await _stage(
             7,
             "Revised script review",
-            pipeline.review_service.review(
-                concept, research_artifacts.research, script_artifacts.script
-            ),
+            pipeline.review_service.review(concept, research, generated_script),
         )
-        _write_model(run_directory / "review-revised.json", review_artifacts.review)
-        _write_model(run_directory / "review.json", review_artifacts.review)
+        reviewed_script = review_artifacts.review
+        _write_model(run_directory / "review-revised.json", reviewed_script)
+        _write_model(run_directory / "review.json", reviewed_script)
 
     approval_stage = 8 if revised else 6
-    if not review_artifacts.review.approved:
+    if not reviewed_script.approved:
         print(
             f"[{approval_stage}/{FIXTURE_MAX_STAGE_COUNT}] Approval gate: "
             "rejected after one revision"
         )
-        for change in review_artifacts.review.required_changes:
+        for change in reviewed_script.required_changes:
             print(f"- {change}")
         print(f"Production-run directory: {run_directory}")
         return 1
@@ -300,70 +415,96 @@ async def run_pipeline(
         perf_counter() - started,
     )
     stage_offset = 2 if revised else 0
-    storyboard = await _stage(
-        7 + stage_offset,
-        "Storyboard generation",
-        pipeline.storyboard_service.generate(
-            concept, script_artifacts.script, review_artifacts.review
-        ),
-    )
-    _write_model(run_directory / "storyboard.json", storyboard.storyboard)
-    voiceover = await _stage(
-        8 + stage_offset,
-        "Voiceover generation",
-        pipeline.voiceover_service.generate(script_artifacts.script, review_artifacts.review),
-    )
-    duration_message = _short_form_duration_rejection(voiceover.manifest)
-    if duration_message is not None:
-        print(duration_message)
-        print(f"Production-run directory: {run_directory}")
-        return 1
-    visual_result = await _stage(
-        9 + stage_offset,
-        "Visual asset generation",
-        pipeline.visual_service.generate(review_artifacts.review, storyboard.storyboard),
-    )
-    if skip_images or not pipeline.visual_settings.live_generation:
-        print(
-            f"[{9 + stage_offset}/{FIXTURE_MAX_STAGE_COUNT}] "
-            "Visual asset generation: manifest-only"
+    if is_reused("storyboard"):
+        storyboard = artifact("storyboard.json", Storyboard)
+        _reused_stage(7, "Storyboard generation")
+    else:
+        storyboard_artifacts = await _stage(
+            7 + stage_offset,
+            "Storyboard generation",
+            pipeline.storyboard_service.generate(concept, generated_script, reviewed_script),
         )
-    persisted_visual = await pipeline.visual_persistence.persist(visual_result)
-    print_stage_update(
-        10 + stage_offset,
-        "Visual asset persistence",
-        "completed",
-        "completed",
-        perf_counter() - started,
-    )
-    segment_paths = {
-        segment.segment_id: voiceover.output_directory / "segments" / segment.audio_filename
-        for segment in voiceover.manifest.segments
-    }
-    timeline = pipeline.timeline_builder.build(
-        storyboard=storyboard.storyboard,
-        voiceover_manifest=voiceover.manifest,
-        visual_asset_manifest=persisted_visual.manifest,
-        voiceover_segment_paths=segment_paths,
-        primary_duration_seconds=voiceover.manifest.generated_duration_seconds,
-        maximum_primary_duration_seconds=short_production_fixture_policy().max_duration_seconds,
-    )
-    print_stage_update(
-        12 + stage_offset,
-        "Timeline builder",
-        "completed",
-        "completed",
-        perf_counter() - started,
-    )
-    timeline_result = await _stage(
-        11 + stage_offset,
-        "Timeline persistence",
-        pipeline.timeline_persistence.persist(timeline),
-    )
-    _copy_file(timeline_result.timeline_json_path, run_directory / "timeline" / "timeline.json")
-    if timeline_result.render_readiness == TimelineRenderReadiness.NOT_READY:
-        print(f"[{13 + stage_offset}/{FIXTURE_MAX_STAGE_COUNT}] Render job: timeline not ready")
-        return 1
+        storyboard = storyboard_artifacts.storyboard
+        _write_model(run_directory / "storyboard.json", storyboard)
+
+    if is_reused("voiceover"):
+        voiceover_manifest = artifact("voiceover.json", VoiceoverManifest)
+        voiceover_directory = run_directory / "voiceover"
+        _reused_stage(8, "Voiceover generation")
+    else:
+        voiceover = await _stage(
+            8 + stage_offset,
+            "Voiceover generation",
+            pipeline.voiceover_service.generate(generated_script, reviewed_script),
+        )
+        voiceover_manifest = voiceover.manifest
+        voiceover_directory = run_directory / "voiceover"
+        _write_model(run_directory / "voiceover.json", voiceover_manifest)
+        _copy_directory(voiceover.output_directory, voiceover_directory)
+        duration_message = _short_form_duration_rejection(voiceover_manifest)
+        if duration_message is not None:
+            print(duration_message)
+            print(f"Production-run directory: {run_directory}")
+            return 1
+
+    if is_reused("visuals"):
+        visual_manifest = artifact("visuals.json", VisualAssetManifest)
+        _reused_stage(9, "Visual asset generation")
+    else:
+        visual_result = await _stage(
+            9 + stage_offset,
+            "Visual asset generation",
+            pipeline.visual_service.generate(reviewed_script, storyboard),
+        )
+        if skip_images or not pipeline.visual_settings.live_generation:
+            print(
+                f"[{9 + stage_offset}/{FIXTURE_MAX_STAGE_COUNT}] "
+                "Visual asset generation: manifest-only"
+            )
+        persisted_visual = await pipeline.visual_persistence.persist(visual_result)
+        visual_manifest = persisted_visual.manifest
+        _write_model(run_directory / "visuals.json", visual_manifest)
+        print_stage_update(
+            10 + stage_offset,
+            "Visual asset persistence",
+            "completed",
+            "completed",
+            perf_counter() - started,
+        )
+
+    if is_reused("timeline"):
+        timeline = artifact("timeline/timeline.json", Timeline)
+        _reused_stage(11, "Timeline persistence")
+    else:
+        segment_paths = {
+            segment.segment_id: voiceover_directory / "segments" / segment.audio_filename
+            for segment in voiceover_manifest.segments
+        }
+        timeline = pipeline.timeline_builder.build(
+            storyboard=storyboard,
+            voiceover_manifest=voiceover_manifest,
+            visual_asset_manifest=visual_manifest,
+            voiceover_segment_paths=segment_paths,
+            primary_duration_seconds=voiceover_manifest.generated_duration_seconds,
+            maximum_primary_duration_seconds=short_production_fixture_policy().max_duration_seconds,
+        )
+        print_stage_update(
+            12 + stage_offset,
+            "Timeline builder",
+            "completed",
+            "completed",
+            perf_counter() - started,
+        )
+        timeline_result = await _stage(
+            11 + stage_offset,
+            "Timeline persistence",
+            pipeline.timeline_persistence.persist(timeline),
+        )
+        timeline = timeline_result.timeline
+        _copy_file(timeline_result.timeline_json_path, run_directory / "timeline" / "timeline.json")
+        if timeline_result.render_readiness == TimelineRenderReadiness.NOT_READY:
+            print(f"[{13 + stage_offset}/{FIXTURE_MAX_STAGE_COUNT}] Render job: timeline not ready")
+            return 1
     settings = RenderSettings(
         video_codec=RenderVideoCodec.H264,
         audio_codec=RenderAudioCodec.AAC,
@@ -378,7 +519,7 @@ async def run_pipeline(
     capabilities = await dependencies.renderer.capabilities()
     job = build_render_job(
         job_id=f"emergency-fund-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}",
-        timeline=timeline_result.timeline,
+        timeline=timeline,
         settings=settings,
         renderer_type=capabilities.renderer_type,
         capabilities=capabilities,
@@ -427,6 +568,11 @@ async def _stage[StageResult](
     result = await awaitable
     print_stage_update(number, name, "completed", "completed", perf_counter() - started)
     return result
+
+
+def _reused_stage(number: int, name: str) -> None:
+    """Report a validated persisted stage without presenting it as newly completed."""
+    print(f"[{number}/{FIXTURE_MAX_STAGE_COUNT}] {name}: reused")
 
 
 def print_stage_update(number: int, name: str, status: str, summary: str, elapsed: float) -> None:
@@ -500,12 +646,24 @@ async def async_main(arguments: argparse.Namespace | None = None) -> int:
     dependencies: ProductionDependencies | None = None
     run_directory: Path | None = None
     try:
+        resume_artifacts: dict[str, BaseModel] | None = None
+        if options.resume_from:
+            if options.run_directory is None:
+                print("--run-directory is required with --resume-from", file=sys.stderr)
+                return 2
+            run_directory = options.run_directory.resolve()
+            resume_artifacts = load_resume_artifacts(run_directory, options.resume_from)
         dependencies = build_production_dependencies(Path.cwd(), skip_images=options.skip_images)
         _validate_visual_cost_controls(dependencies, options.skip_images)
-        run_directory = create_run_directory(options.output_root)
-        if options.resume_from:
-            load_resume_artifacts(run_directory, options.resume_from)
-        return await run_pipeline(dependencies, run_directory, skip_images=options.skip_images)
+        if run_directory is None:
+            run_directory = create_run_directory(options.output_root)
+        return await run_pipeline(
+            dependencies,
+            run_directory,
+            skip_images=options.skip_images,
+            resume_from=options.resume_from,
+            resume_artifacts=resume_artifacts,
+        )
     except Exception as error:
         print_failure_summary(error, run_directory, options.resume_from or "production fixture")
         return 1
@@ -527,6 +685,11 @@ def _write_model(path: Path, model: BaseModel) -> None:
 def _copy_file(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+def _copy_directory(source: Path, destination: Path) -> None:
+    """Make newly generated voiceover media available inside its production run."""
+    shutil.copytree(source, destination)
 
 
 async def _close(dependencies: ProductionDependencies) -> None:

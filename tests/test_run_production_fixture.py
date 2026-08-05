@@ -12,7 +12,12 @@ from pydantic import BaseModel
 from pytest import CaptureFixture, MonkeyPatch
 
 from shared.models.script_review import ReviewScores, ScriptReview
+from shared.models.storyboard import Storyboard, StoryboardSummary
+from shared.models.timeline import Timeline, TimelineSummary
+from shared.models.topic import TopicCandidate
+from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
+from shared.models.visual_assets import VisualAssetManifest
 from shared.models.voiceover import (
     NarrationSegment,
     NarrationSegmentType,
@@ -99,10 +104,10 @@ async def test_missing_configuration_fails_before_dependency_construction(
 
 
 def test_resume_requires_validated_prior_artifact(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="Resume requires"):
+    with pytest.raises(ValueError, match=r"Missing validated artifact: topic\.json"):
         cli.load_resume_artifacts(tmp_path, "research")
     (tmp_path / "topic.json").write_text("not-json", encoding="utf-8")
-    with pytest.raises(ValueError, match="invalid"):
+    with pytest.raises(ValueError, match=r"Validated artifact is invalid: topic\.json"):
         cli.load_resume_artifacts(tmp_path, "concept")
 
 
@@ -141,6 +146,8 @@ def test_fixture_dependency_construction_passes_its_local_editorial_brief(
     cli.build_production_dependencies(tmp_path, skip_images=True)
 
     assert captured["script_editorial_constraints"] == list(cli.FIXTURE_EDITORIAL_CONSTRAINTS)
+    assert captured["reviewer_editorial_constraints"] == list(cli.FIXTURE_EDITORIAL_CONSTRAINTS)
+    assert captured["script_editorial_constraints"] is captured["reviewer_editorial_constraints"]
     assert captured["include_disclaimer_in_audio"] is False
 
 
@@ -197,6 +204,124 @@ def review(*, approved: bool, title: str) -> ScriptReview:
     )
 
 
+def topic() -> TopicCandidate:
+    """Build a validated persisted topic for resume-only orchestration tests."""
+    return TopicCandidate(
+        title="Emergency fund",
+        description="Why a small reserve matters.",
+        keywords=["emergency fund"],
+        source="fixture",
+        category="Personal Finance",
+        evergreen_score=1,
+        ctr_score=1,
+        competition_score=1,
+        monetization_score=1,
+        overall_score=1,
+        reason="Useful fixture topic.",
+    )
+
+
+def concept() -> VideoConcept:
+    """Build a validated persisted concept for resume-only orchestration tests."""
+    return VideoConcept(
+        title="Emergency fund",
+        hook="A small reserve can add options.",
+        thumbnail_text="Emergency fund",
+        content_pillar="Personal Finance",
+        target_audience="Working adults",
+        estimated_duration_minutes=1,
+        why_it_works="Concrete and practical.",
+        research_questions=[],
+        keywords=["emergency fund"],
+        difficulty="beginner",
+    )
+
+
+def research() -> BaseModel:
+    """Build the minimal validated research package needed by resume tests."""
+    from shared.models.research import ResearchPackage
+
+    return ResearchPackage(
+        title="Emergency fund",
+        executive_summary="A modest reserve can improve options.",
+        key_facts=[],
+        statistics=[],
+        supporting_examples=[],
+        counter_arguments=[],
+        research_questions=[],
+        references=[],
+        story_outline=[],
+        confidence_score=1,
+    )
+
+
+def resume_artifacts(stage: str) -> dict[str, BaseModel]:
+    """Provide validated upstream models without writing or regenerating them."""
+    artifacts: dict[str, BaseModel] = {
+        "topic.json": topic(),
+        "concept.json": concept(),
+        "research.json": research(),
+        "script.json": script("Persisted script"),
+        "review.json": review(approved=True, title="Persisted script"),
+        "storyboard.json": Storyboard.model_construct(
+            title="Emergency fund",
+            visual_style="Documentary",
+            scenes=[],
+            summary=StoryboardSummary(
+                total_scenes=0,
+                total_duration_seconds=0,
+                ai_image_count=0,
+                ai_video_count=0,
+                stock_video_count=0,
+                stock_image_count=0,
+                motion_graphic_count=0,
+                chart_count=0,
+                typography_count=0,
+                screenshot_count=0,
+                screen_recording_count=0,
+                estimated_ai_generation_count=0,
+            ),
+            production_warnings=[],
+            generated_at=datetime(2026, 8, 4, tzinfo=UTC),
+            storyboard_version="1.0",
+        ),
+        "voiceover.json": voiceover_manifest(40),
+        "visuals.json": VisualAssetManifest.model_construct(
+            title="Emergency fund",
+            storyboard_version="1.0",
+            assets=[],
+            generated_at=datetime(2026, 8, 4, tzinfo=UTC),
+            manifest_version="1.0",
+        ),
+    }
+    if stage == "render":
+        artifacts["timeline/timeline.json"] = Timeline.model_construct(
+            title="Emergency fund",
+            tracks=[],
+            summary=TimelineSummary(
+                total_duration_seconds=0,
+                total_tracks=0,
+                total_clips=0,
+                ready_clip_count=0,
+                placeholder_clip_count=0,
+                missing_clip_count=0,
+                review_clip_count=0,
+                failed_clip_count=0,
+                video_clip_count=0,
+                narration_clip_count=0,
+                music_clip_count=0,
+                sound_effect_clip_count=0,
+                overlay_count=0,
+                caption_count=0,
+            ),
+            source_storyboard_version="1.0",
+            source_voiceover_manifest_version="1.0",
+            source_visual_manifest_version="1.0",
+            generated_at=datetime(2026, 8, 4, tzinfo=UTC),
+        )
+    return artifacts
+
+
 def pipeline_dependencies(
     reviews: list[ScriptReview],
 ) -> tuple[FixtureDependencies, dict[str, MagicMock]]:
@@ -240,6 +365,87 @@ def pipeline_dependencies(
         "voiceover": pipeline.voiceover_service,
         "visual": pipeline.visual_service,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resume_from", "expected_service"),
+    [
+        ("script", "script"),
+        ("review", "review"),
+        ("storyboard", "storyboard"),
+        ("voiceover", "voiceover"),
+        ("visuals", "visual"),
+        ("timeline", "timeline"),
+        ("render", "render"),
+    ],
+)
+async def test_resume_executes_only_the_selected_stage_and_later_work(
+    tmp_path: Path,
+    resume_from: str,
+    expected_service: str,
+    capsys: CaptureFixture[str],
+) -> None:
+    """A resume never invokes an upstream provider or regenerates persisted models."""
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title="Persisted script")])
+    stop = RuntimeError(f"{resume_from} reached")
+    render_capabilities: AsyncMock | None = None
+    if expected_service == "storyboard":
+        mocks["storyboard"].generate.side_effect = stop
+    elif expected_service == "voiceover":
+        mocks["voiceover"].generate.side_effect = stop
+    elif expected_service == "visual":
+        mocks["visual"].generate.side_effect = stop
+    elif expected_service == "timeline":
+        dependencies.pipeline.timeline_builder.build.side_effect = stop
+    elif expected_service == "render":
+        render_capabilities = AsyncMock(side_effect=stop)
+        renderer = SimpleNamespace(capabilities=render_capabilities, close=AsyncMock())
+        dependencies = cli.ProductionDependencies(
+            dependencies.pipeline,
+            renderer,
+            MagicMock(),
+            MagicMock(),
+        )
+
+    with pytest.raises(RuntimeError):
+        await cli.run_pipeline(
+            dependencies,
+            tmp_path,
+            skip_images=True,
+            resume_from=resume_from,
+            resume_artifacts=resume_artifacts(resume_from),
+        )
+
+    dependencies.pipeline.topic_service.discover.assert_not_awaited()
+    dependencies.pipeline.concept_service.generate.assert_not_awaited()
+    dependencies.pipeline.research_service.generate.assert_not_awaited()
+    if resume_from != "script":
+        mocks["script"].generate.assert_not_awaited()
+    mocks["script"].generate_revision.assert_not_awaited()
+    if resume_from not in {"script", "review"}:
+        mocks["review"].review.assert_not_awaited()
+
+    if expected_service == "script":
+        mocks["script"].generate.assert_awaited_once()
+    elif expected_service == "review":
+        mocks["review"].review.assert_awaited_once()
+    elif expected_service == "storyboard":
+        mocks["storyboard"].generate.assert_awaited_once()
+    elif expected_service == "voiceover":
+        mocks["voiceover"].generate.assert_awaited_once()
+    elif expected_service == "visual":
+        mocks["visual"].generate.assert_awaited_once()
+    elif expected_service == "timeline":
+        dependencies.pipeline.timeline_builder.build.assert_called_once()
+    else:
+        assert render_capabilities is not None
+        render_capabilities.assert_awaited_once()
+
+    output = capsys.readouterr().out
+    assert "[1/17] Topic generation: reused" in output
+    if resume_from in {"review", "storyboard", "voiceover", "visuals", "timeline", "render"}:
+        assert "[4/17] Script generation: reused" in output
 
 
 def voiceover_manifest(duration: float) -> VoiceoverManifest:
