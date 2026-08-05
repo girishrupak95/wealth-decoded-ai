@@ -107,6 +107,8 @@ def build_dependencies(
     *,
     script_policy: ScriptLengthPolicy | None = None,
     visual_live_generation: bool | None = None,
+    include_disclaimer_in_audio: bool = True,
+    script_editorial_constraints: list[str] | None = None,
 ) -> PipelineDependencies:
     """Construct dependencies without executing services, inspecting media, or creating files."""
     openai_settings = OpenAISettings()
@@ -178,6 +180,7 @@ def build_dependencies(
             ),
             generated_root / SCRIPTS_DIRECTORY_NAME,
             policy=script_policy,
+            editorial_constraints=script_editorial_constraints,
         ),
         review_service=ScriptReviewService(
             ReviewerAgent(
@@ -207,6 +210,7 @@ def build_dependencies(
             model_id=elevenlabs_settings.model_id,
             output_format=elevenlabs_settings.output_format,
             voice_settings=elevenlabs_settings.voice_settings(),
+            include_disclaimer_in_audio=include_disclaimer_in_audio,
         ),
         visual_service=visual_service,
         visual_persistence=VisualAssetPersistence(generated_root),

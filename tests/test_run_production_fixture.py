@@ -106,6 +106,44 @@ def test_resume_requires_validated_prior_artifact(tmp_path: Path) -> None:
         cli.load_resume_artifacts(tmp_path, "concept")
 
 
+def test_fixture_dependency_construction_passes_its_local_editorial_brief(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    def build_dependencies(_: Path, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        cli.importlib,
+        "import_module",
+        lambda _: SimpleNamespace(build_dependencies=build_dependencies),
+    )
+    monkeypatch.setattr(
+        cli,
+        "FFmpegRenderSettings",
+        lambda: SimpleNamespace(
+            ffmpeg_executable="ffmpeg",
+            render_font_path=None,
+            render_timeout_seconds=1,
+            render_graceful_termination_seconds=1,
+            ffprobe_executable="ffprobe",
+            ffprobe_timeout_seconds=1,
+        ),
+    )
+    monkeypatch.setattr(cli, "FFmpegCommandBuilder", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "FFmpegProcessRunner", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "FFprobeAdapter", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "FFmpegRenderer", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "RenderResultPersistence", lambda: object())
+
+    cli.build_production_dependencies(tmp_path, skip_images=True)
+
+    assert captured["script_editorial_constraints"] == list(cli.FIXTURE_EDITORIAL_CONSTRAINTS)
+    assert captured["include_disclaimer_in_audio"] is False
+
+
 def script(title: str) -> VideoScript:
     """Create a valid script artifact that can be persisted by the fixture."""
     sections = [

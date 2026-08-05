@@ -49,6 +49,7 @@ class PolicyAwareScriptGenerator(ScriptGenerator, Protocol):
         research: ResearchPackage,
         quality_feedback: str | None = None,
         policy: ScriptLengthPolicy | None = None,
+        editorial_constraints: list[str] | None = None,
     ) -> VideoScript:
         """Return a validated script with policy-aware prompt context."""
         ...
@@ -80,12 +81,14 @@ class ScriptGenerationService:
         words_per_minute: int = DEFAULT_SCRIPT_WORDS_PER_MINUTE,
         visual_pause_seconds: int = DEFAULT_SCRIPT_VISUAL_PAUSE_SECONDS,
         policy: ScriptLengthPolicy | None = None,
+        editorial_constraints: list[str] | None = None,
     ) -> None:
         self._script_agent = script_agent
         self._output_root = output_root
         self._enforce_production_length = enforce_production_length
         self._policy = policy or ScriptLengthPolicy(min_words=min_words, max_words=max_words)
         self._uses_explicit_policy = policy is not None
+        self._editorial_constraints = list(editorial_constraints or [])
         self._max_retries = max_retries
         self._words_per_minute = words_per_minute
         self._visual_pause_seconds = visual_pause_seconds
@@ -105,7 +108,11 @@ class ScriptGenerationService:
         script = await self._generate_quality_checked_script(
             concept,
             research,
-            self._review_rewrite_instruction(reviewer_feedback, previous_script),
+            self._review_rewrite_instruction(
+                reviewer_feedback,
+                previous_script,
+                self._editorial_constraints,
+            ),
         )
         directory = self._output_root / timestamp.date().isoformat()
         await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
@@ -243,6 +250,7 @@ class ScriptGenerationService:
     def _review_rewrite_instruction(
         reviewer_feedback: list[str] | None,
         previous_script: VideoScript | None = None,
+        editorial_constraints: list[str] | None = None,
     ) -> str | None:
         """Translate editorial findings into a bounded, source-safe rewrite brief."""
         findings = list(
@@ -265,6 +273,7 @@ class ScriptGenerationService:
                 "- The active spoken-word and duration policy limits.",
                 "REWRITE THESE",
                 *[f"- {instruction}" for instruction in rewrite_instructions],
+                *ScriptGenerationService._editorial_constraints_context(editorial_constraints),
                 *ScriptGenerationService._previous_script_context(previous_script),
                 "DO NOT",
                 "- Invent new statistics, facts, or sources.",
@@ -292,12 +301,10 @@ class ScriptGenerationService:
                 "Make the primary CTA one concrete financial action; mention subscribing only "
                 "after that action."
             )
-        if "$" in finding or (
-            "illustrative" in normalized and any(char.isdigit() for char in finding)
-        ):
+        if "$" in finding or "month" in normalized or "timeline" in normalized:
             return (
-                "Remove the unsupported amount or explicitly label it as an illustrative example; "
-                "do not present it as a researched recommendation."
+                "Remove the unsupported dollar amount or time milestone; retain it only when it "
+                "is copied exactly from an allowed source reference."
             )
         if "flow" in normalized or "connect section" in normalized:
             return (
@@ -331,13 +338,36 @@ class ScriptGenerationService:
             "Revise this complete script only where the reviewer findings require changes.",
         ]
 
+    @staticmethod
+    def _editorial_constraints_context(editorial_constraints: list[str] | None) -> list[str]:
+        """Keep active fixture direction visible inside a reviewer-driven rewrite."""
+        constraints = [
+            constraint.strip() for constraint in editorial_constraints or [] if constraint.strip()
+        ]
+        if not constraints:
+            return []
+        return ["ACTIVE EDITORIAL CONSTRAINTS", *[f"- {constraint}" for constraint in constraints]]
+
     async def _generate_from_agent(
         self, concept: VideoConcept, research: ResearchPackage, feedback: str | None
     ) -> VideoScript:
         """Preserve legacy agent calls unless an explicit policy needs prompt context."""
-        if self._uses_explicit_policy:
+        if self._uses_explicit_policy or self._editorial_constraints:
             policy_aware_agent = cast(PolicyAwareScriptGenerator, self._script_agent)
-            return await policy_aware_agent.generate(concept, research, feedback, self._policy)
+            if not self._editorial_constraints:
+                return await policy_aware_agent.generate(
+                    concept,
+                    research,
+                    feedback,
+                    self._policy if self._uses_explicit_policy else None,
+                )
+            return await policy_aware_agent.generate(
+                concept,
+                research,
+                feedback,
+                self._policy if self._uses_explicit_policy else None,
+                self._editorial_constraints or None,
+            )
         return await self._script_agent.generate(concept, research, feedback)
 
     @staticmethod

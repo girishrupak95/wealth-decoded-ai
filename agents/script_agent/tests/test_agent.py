@@ -121,6 +121,7 @@ def make_agent(tmp_path: Path, response: str) -> tuple[ScriptAgent, MockLLMClien
     (prompt_directory / "system.md").write_text("Return JSON only.", encoding="utf-8")
     (prompt_directory / "user.md").write_text(
         "Concept: $video_concept\nResearch: $research_package\n"
+        "$active_editorial_constraints\n"
         "ALLOWED_SOURCE_REFERENCES: $allowed_source_references\n"
         "Policy: $script_length_policy\n"
         "ACTIVE PRODUCTION CONSTRAINTS: $active_script_constraints\n"
@@ -180,6 +181,39 @@ async def test_script_agent_includes_explicit_length_policy_in_prompt_context(
         "TOTAL SPOKEN WORDS = hook + intro + every sections[].narration + conclusion + CTA + "
         "disclaimer" in client.request.template
     )
+
+
+@pytest.mark.asyncio
+async def test_script_agent_includes_optional_editorial_constraints_after_research(
+    tmp_path: Path,
+) -> None:
+    agent, client = make_agent(tmp_path, json.dumps(script_payload()))
+    constraints = [
+        "Do not introduce a fixed starter amount such as $500.",
+        "Do not introduce a fixed one-month checkpoint or savings timeline.",
+        "Use one concrete scenario before offering a cautious partial benefit.",
+        "Make the primary CTA action-first and keep subscription language optional.",
+    ]
+
+    await agent.generate(
+        make_concept(),
+        make_research(),
+        policy=short_production_fixture_policy(),
+        editorial_constraints=constraints,
+    )
+
+    assert client.request is not None
+    template = client.request.template
+    assert "ACTIVE EDITORIAL CONSTRAINTS" in template
+    assert "fixed starter amount such as $500" in template
+    assert "fixed one-month checkpoint" in template
+    assert "one concrete scenario" in template
+    assert "action-first" in template
+    assert "subscription language optional" in template
+    assert template.index("ACTIVE EDITORIAL CONSTRAINTS") > template.index("Research:")
+    assert "ALLOWED_SOURCE_REFERENCES" in template
+    assert "total spoken word count must be 75-110 words" in template
+    assert "character-for-character" in template
     assert "Do not put the total budget only in section narration" in client.request.template
     assert (
         "hook 8-12 words; intro 0-8 words; section narration combined 45-60 words"

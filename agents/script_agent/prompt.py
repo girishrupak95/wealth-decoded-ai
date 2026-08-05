@@ -12,6 +12,7 @@ def build_script_request(
     research: ResearchPackage,
     quality_feedback: str | None = None,
     policy: ScriptLengthPolicy | None = None,
+    editorial_constraints: list[str] | None = None,
 ) -> AgentRequest:
     """Build a provider-neutral script generation request."""
     active_policy = policy or ScriptLengthPolicy(
@@ -26,11 +27,33 @@ def build_script_request(
         context={
             "video_concept": concept.model_dump(mode="json"),
             "research_package": research.model_dump(mode="json"),
+            "active_editorial_constraints": _active_editorial_constraints(editorial_constraints),
             "allowed_source_references": research.references,
             "quality_feedback": quality_feedback or "No corrective feedback.",
             "script_length_policy": active_policy.model_dump(mode="json"),
             "active_script_constraints": _active_script_constraints(active_policy),
         },
+    )
+
+
+def _active_editorial_constraints(editorial_constraints: list[str] | None) -> str:
+    """Render optional fixture-only direction without changing default prompt behavior."""
+    constraints = [
+        constraint.strip() for constraint in editorial_constraints or [] if constraint.strip()
+    ]
+    if not constraints:
+        return ""
+    return "\n".join(
+        [
+            "ACTIVE EDITORIAL CONSTRAINTS",
+            *[f"- {constraint}" for constraint in constraints],
+            (
+                "These constraints are mandatory for this production run and override conflicting "
+                "optional ideas in the concept, research outline, production notes, or reviewer "
+                "suggestions. They do not override exact source requirements, finance compliance, "
+                "active word/duration bounds, or the Pydantic schema."
+            ),
+        ]
     )
 
 

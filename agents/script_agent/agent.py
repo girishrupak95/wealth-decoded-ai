@@ -39,10 +39,11 @@ class ScriptAgent(BaseAgent):
         research: ResearchPackage,
         quality_feedback: str | None = None,
         policy: ScriptLengthPolicy | None = None,
+        editorial_constraints: list[str] | None = None,
     ) -> VideoScript:
         """Return a validated script without persisting it."""
         execution = await self.execute(
-            build_script_request(concept, research, quality_feedback, policy)
+            build_script_request(concept, research, quality_feedback, policy, editorial_constraints)
         )
         script = VideoScript.model_validate(execution.output)
         unverified_sources = {

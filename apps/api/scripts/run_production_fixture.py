@@ -63,6 +63,33 @@ FIXTURE_STAGES = (
     "render",
 )
 FIXTURE_MAX_STAGE_COUNT = 17
+FIXTURE_EDITORIAL_CONSTRAINTS = (
+    "Do not introduce a fixed starter amount such as $500.",
+    "Do not introduce a fixed one-month checkpoint or savings timeline.",
+    (
+        "Remove numbers not copied from an allowed research reference; avoid unnecessary "
+        "dollar milestones."
+    ),
+    (
+        "Use one concrete scenario: an unexpected necessary bill before payday or a temporary "
+        "income disruption."
+    ),
+    (
+        "Do not imply every unexpected bill creates debt, a small buffer covers an entire "
+        "expense, or one target fits every household."
+    ),
+    (
+        "State benefits cautiously: a buffer may cover part of a cost, reduce borrowing, or "
+        "create more response options."
+    ),
+    (
+        "Make the primary CTA action-first: review recent unexpected essential costs, choose a "
+        "personalized starter milestone, and automate a sustainable transfer."
+    ),
+    "Keep subscription language optional and secondary; omit it when it makes the ending abrupt.",
+    "Use conversational transitions rather than a compressed checklist.",
+    "Stay within the active 75-110 spoken-word and 30-45 second policy.",
+)
 
 
 class ProductionFixtureError(ValueError):
@@ -176,6 +203,7 @@ def build_production_dependencies(
         script_policy=short_production_fixture_policy(),
         visual_live_generation=False if skip_images else None,
         include_disclaimer_in_audio=False,
+        script_editorial_constraints=list(FIXTURE_EDITORIAL_CONSTRAINTS),
     )
     settings = FFmpegRenderSettings()
     builder = FFmpegCommandBuilder(

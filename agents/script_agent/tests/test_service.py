@@ -8,6 +8,7 @@ from agents.script_agent.agent import ScriptSourceReferenceError
 from agents.script_agent.service import ScriptGenerationService
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import short_production_fixture_policy
+from shared.models.script_review import ReviewFinding, ReviewScores, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import (
     ScriptSection,
@@ -258,6 +259,74 @@ async def test_service_retries_with_corrective_feedback(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_translates_reviewer_feedback_into_rewrite_instructions(
+    tmp_path: Path,
+) -> None:
+    generator = PolicyAwareSequencedScriptGenerator([make_script_with_narration("word " * 28)])
+    service = ScriptGenerationService(
+        generator,
+        tmp_path,
+        policy=short_production_fixture_policy(),
+        max_retries=1,
+    )
+
+    await service.generate(
+        make_concept(),
+        make_research(),
+        reviewer_feedback=[
+            "Strengthen the hook.",
+            "The CTA is subscription-heavy.",
+            "Clarify that $500 is illustrative.",
+            "Improve conversational flow between sections.",
+        ],
+    )
+
+    feedback = generator.feedback[0]
+    assert feedback is not None
+    assert "KEEP THESE UNCHANGED" in feedback
+    assert "REWRITE THESE" in feedback
+    assert "DO NOT" in feedback
+    assert "first sentence establishes the video's promise" in feedback
+    assert "primary CTA one concrete financial action" in feedback
+    assert "Remove the unsupported dollar amount or time milestone" in feedback
+    assert "Improve transitions" in feedback
+    assert "source_reference copied exactly from ALLOWED_SOURCE_REFERENCES" in feedback
+    assert "active spoken-word and duration policy limits" in feedback
+    assert "Rewrite the COMPLETE script." in feedback
+    assert "Address every reviewer finding." in feedback
+    assert "Keep all existing valid constraints." in feedback
+    assert "Return only valid JSON." in feedback
+    assert len(generator.feedback) == 1
+
+
+def test_reviewer_feedback_preserves_every_finding_and_deduplicates_repeats() -> None:
+    instruction = ScriptGenerationService._review_rewrite_instruction(
+        [
+            "Improve framing.",
+            "Improve framing.",
+            "Connect sections better.",
+        ]
+    )
+
+    assert instruction is not None
+    assert instruction.count("Clarify the framing") == 1
+    assert "Improve transitions" in instruction
+
+
+@pytest.mark.asyncio
+async def test_long_form_generation_remains_unchanged_without_reviewer_feedback(
+    tmp_path: Path,
+) -> None:
+    generator = SequencedScriptGenerator([make_script_with_narration("word " * 220)])
+    service = ScriptGenerationService(generator, tmp_path)
+
+    artifacts = await service.generate(make_concept(), make_research())
+
+    assert 600 <= artifacts.script.estimated_word_count <= 900
+    assert generator.feedback == [None]
+
+
+@pytest.mark.asyncio
 async def test_service_fails_after_bounded_retry_limit(tmp_path: Path) -> None:
     generator = SequencedScriptGenerator(
         [make_script_with_narration("short"), make_script_with_narration("short")]
@@ -272,6 +341,8 @@ class PolicyAwareSequencedScriptGenerator:
     def __init__(self, results: list[VideoScript | ScriptSourceReferenceError]) -> None:
         self._results = results
         self.feedback: list[str | None] = []
+        self.policies: list[object | None] = []
+        self.editorial_constraints: list[list[str] | None] = []
 
     async def generate(
         self,
@@ -279,12 +350,112 @@ class PolicyAwareSequencedScriptGenerator:
         research: ResearchPackage,
         quality_feedback: str | None = None,
         policy: object | None = None,
+        editorial_constraints: list[str] | None = None,
     ) -> VideoScript:
         self.feedback.append(quality_feedback)
+        self.policies.append(policy)
+        self.editorial_constraints.append(editorial_constraints)
         result = self._results.pop(0)
         if isinstance(result, ScriptSourceReferenceError):
             raise result
         return result
+
+
+@pytest.mark.asyncio
+async def test_generate_revision_preserves_script_context_findings_and_policy(
+    tmp_path: Path,
+) -> None:
+    policy = short_production_fixture_policy()
+    previous_script = make_script_with_narration("word " * 28)
+    revised_script = make_script_with_narration("word " * 28)
+    generator = PolicyAwareSequencedScriptGenerator([revised_script])
+    service = ScriptGenerationService(generator, tmp_path, policy=policy)
+    review = ScriptReview(
+        script_title=previous_script.title,
+        approved=False,
+        scores=ReviewScores(
+            hook_score=7,
+            accuracy_score=8,
+            structure_score=8,
+            retention_score=7,
+            clarity_score=8,
+            tone_score=8,
+            compliance_score=9,
+            overall_score=7,
+        ),
+        findings=[
+            ReviewFinding(
+                finding_id="hook-1",
+                category="hook",
+                severity="warning",
+                section_id=None,
+                message="The opening does not state a clear promise.",
+                evidence="The first sentence is generic.",
+                recommended_change="Use one concrete scenario.",
+            )
+        ],
+        revision_summary="Strengthen the opening.",
+        required_changes=["Strengthen the hook."],
+        optional_improvements=[],
+        reviewed_at=datetime(2026, 8, 4, tzinfo=UTC),
+        reviewer_version="1.0",
+    )
+
+    await service.generate_revision(make_concept(), make_research(), previous_script, review)
+
+    feedback = generator.feedback[0]
+    assert feedback is not None
+    assert "PREVIOUS VALIDATED SCRIPT" in feedback
+    assert previous_script.model_dump_json() in feedback
+    assert "opening so the first sentence establishes" in feedback
+    assert "one concrete scenario" in feedback
+    assert generator.policies == [policy]
+
+
+@pytest.mark.asyncio
+async def test_editorial_constraints_reach_initial_generation_and_revision(tmp_path: Path) -> None:
+    policy = short_production_fixture_policy()
+    constraints = ["Do not introduce a fixed starter amount such as $500."]
+    previous_script = make_script_with_narration("word " * 28)
+    generator = PolicyAwareSequencedScriptGenerator(
+        [make_script_with_narration("word " * 28), make_script_with_narration("word " * 28)]
+    )
+    service = ScriptGenerationService(
+        generator,
+        tmp_path,
+        policy=policy,
+        editorial_constraints=constraints,
+    )
+    review = ScriptReview(
+        script_title=previous_script.title,
+        approved=False,
+        scores=ReviewScores(
+            hook_score=7,
+            accuracy_score=8,
+            structure_score=8,
+            retention_score=7,
+            clarity_score=8,
+            tone_score=8,
+            compliance_score=9,
+            overall_score=7,
+        ),
+        findings=[],
+        revision_summary="Remove the unsupported $500 amount.",
+        required_changes=["Remove the unsupported $500 amount."],
+        optional_improvements=[],
+        reviewed_at=datetime(2026, 8, 4, tzinfo=UTC),
+        reviewer_version="1.0",
+    )
+
+    await service.generate(make_concept(), make_research())
+    await service.generate_revision(make_concept(), make_research(), previous_script, review)
+
+    assert generator.editorial_constraints == [constraints, constraints]
+    revision_feedback = generator.feedback[1]
+    assert revision_feedback is not None
+    assert "ACTIVE EDITORIAL CONSTRAINTS" in revision_feedback
+    assert constraints[0] in revision_feedback
+    assert "Remove the unsupported dollar amount or time milestone" in revision_feedback
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,8 @@ Research package:
 
 $research_package
 
+$active_editorial_constraints
+
 ALLOWED_SOURCE_REFERENCES:
 
 $allowed_source_references
