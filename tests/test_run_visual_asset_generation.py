@@ -117,7 +117,7 @@ def dependencies(*, approved: bool) -> tuple[object, dict[str, MagicMock]]:
         visual_service=visual_service,
         persistence=persistence,
         client=client,
-        visual_settings=VisualAssetSettings(),
+        visual_settings=VisualAssetSettings(live_generation=False),
     )
     return injected, {
         "storyboard": storyboard_service,

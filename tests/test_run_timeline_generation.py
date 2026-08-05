@@ -118,7 +118,7 @@ def dependencies(*, approved: bool) -> tuple[object, dict[str, MagicMock]]:
         timeline_persistence=timeline_persistence,
         client=client,
         voice_provider=voice_provider,
-        visual_settings=VisualAssetSettings(),
+        visual_settings=VisualAssetSettings(live_generation=False),
     )
     return injected, {
         "calls": MagicMock(return_value=calls),

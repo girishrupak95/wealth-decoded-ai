@@ -48,7 +48,10 @@ def test_module_is_import_safe_and_allocates_collision_safe_runs(tmp_path: Path)
 async def test_dry_run_performs_no_provider_or_render_calls(
     monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(cli, "validate_live_configuration", lambda: [])
+    monkeypatch.setenv("WEALTH_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("WEALTH_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setenv("ELEVENLABS_VOICE_ID", "test-voice")
     monkeypatch.setattr(cli, "build_production_dependencies", build_dry_dependencies)
 
     exit_code = await cli.async_main(cli.parse_arguments(["--dry-run"]))
