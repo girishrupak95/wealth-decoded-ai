@@ -61,6 +61,7 @@ FIXTURE_STAGES = (
     "timeline",
     "render",
 )
+FIXTURE_MAX_STAGE_COUNT = 17
 
 
 class ProductionFixtureError(ValueError):
@@ -212,25 +213,65 @@ async def run_pipeline(
     _write_model(run_directory / "research.json", research_artifacts.research)
     script_artifacts = await _stage(
         4,
-        "Script generation",
+        "Initial script generation",
         pipeline.script_service.generate(concept, research_artifacts.research),
     )
+    _write_model(run_directory / "script-initial.json", script_artifacts.script)
     _write_model(run_directory / "script.json", script_artifacts.script)
     review_artifacts = await _stage(
         5,
-        "Script review",
+        "Initial script review",
         pipeline.review_service.review(
             concept, research_artifacts.research, script_artifacts.script
         ),
     )
+    _write_model(run_directory / "review-initial.json", review_artifacts.review)
     _write_model(run_directory / "review.json", review_artifacts.review)
+    revised = False
     if not review_artifacts.review.approved:
-        print("[6/15] Approval gate: rejected")
+        script_artifacts = await _stage(
+            6,
+            "Editorial revision",
+            pipeline.script_service.generate_revision(
+                concept,
+                research_artifacts.research,
+                script_artifacts.script,
+                review_artifacts.review,
+            ),
+        )
+        revised = True
+        _write_model(run_directory / "script-revised.json", script_artifacts.script)
+        _write_model(run_directory / "script.json", script_artifacts.script)
+        review_artifacts = await _stage(
+            7,
+            "Revised script review",
+            pipeline.review_service.review(
+                concept, research_artifacts.research, script_artifacts.script
+            ),
+        )
+        _write_model(run_directory / "review-revised.json", review_artifacts.review)
+        _write_model(run_directory / "review.json", review_artifacts.review)
+
+    approval_stage = 8 if revised else 6
+    if not review_artifacts.review.approved:
+        print(
+            f"[{approval_stage}/{FIXTURE_MAX_STAGE_COUNT}] Approval gate: "
+            "rejected after one revision"
+        )
         for change in review_artifacts.review.required_changes:
             print(f"- {change}")
+        print(f"Production-run directory: {run_directory}")
         return 1
+    print_stage_update(
+        approval_stage,
+        "Approval gate",
+        "approved",
+        "approved",
+        perf_counter() - started,
+    )
+    stage_offset = 2 if revised else 0
     storyboard = await _stage(
-        7,
+        7 + stage_offset,
         "Storyboard generation",
         pipeline.storyboard_service.generate(
             concept, script_artifacts.script, review_artifacts.review
@@ -238,20 +279,27 @@ async def run_pipeline(
     )
     _write_model(run_directory / "storyboard.json", storyboard.storyboard)
     voiceover = await _stage(
-        8,
+        8 + stage_offset,
         "Voiceover generation",
         pipeline.voiceover_service.generate(script_artifacts.script, review_artifacts.review),
     )
     visual_result = await _stage(
-        9,
+        9 + stage_offset,
         "Visual asset generation",
         pipeline.visual_service.generate(review_artifacts.review, storyboard.storyboard),
     )
     if skip_images or not pipeline.visual_settings.live_generation:
-        print("[9/15] Visual asset generation: manifest-only")
+        print(
+            f"[{9 + stage_offset}/{FIXTURE_MAX_STAGE_COUNT}] "
+            "Visual asset generation: manifest-only"
+        )
     persisted_visual = await pipeline.visual_persistence.persist(visual_result)
     print_stage_update(
-        10, "Visual asset persistence", "completed", "completed", perf_counter() - started
+        10 + stage_offset,
+        "Visual asset persistence",
+        "completed",
+        "completed",
+        perf_counter() - started,
     )
     segment_paths = {
         segment.segment_id: voiceover.output_directory / "segments" / segment.audio_filename
@@ -263,13 +311,21 @@ async def run_pipeline(
         visual_asset_manifest=persisted_visual.manifest,
         voiceover_segment_paths=segment_paths,
     )
-    print_stage_update(12, "Timeline builder", "completed", "completed", perf_counter() - started)
+    print_stage_update(
+        12 + stage_offset,
+        "Timeline builder",
+        "completed",
+        "completed",
+        perf_counter() - started,
+    )
     timeline_result = await _stage(
-        11, "Timeline persistence", pipeline.timeline_persistence.persist(timeline)
+        11 + stage_offset,
+        "Timeline persistence",
+        pipeline.timeline_persistence.persist(timeline),
     )
     _copy_file(timeline_result.timeline_json_path, run_directory / "timeline" / "timeline.json")
     if timeline_result.render_readiness == TimelineRenderReadiness.NOT_READY:
-        print("[13/15] Render job: timeline not ready")
+        print(f"[{13 + stage_offset}/{FIXTURE_MAX_STAGE_COUNT}] Render job: timeline not ready")
         return 1
     settings = RenderSettings(
         video_codec=RenderVideoCodec.H264,
@@ -293,7 +349,13 @@ async def run_pipeline(
         created_at=datetime.now(UTC),
     )
     plan = dependencies.builder.build(job)
-    print_stage_update(13, "Render job", "completed", f"{len(plan.inputs)} inputs", started)
+    print_stage_update(
+        13 + stage_offset,
+        "Render job",
+        "completed",
+        f"{len(plan.inputs)} inputs",
+        started,
+    )
     result = await dependencies.renderer.render(job)
     json_path, markdown_path = await dependencies.result_persistence.persist(
         result, title=job.title, output_directory=job.output_directory
@@ -303,9 +365,21 @@ async def run_pipeline(
     output = result.output
     if output is None:
         raise ProductionFixtureError("FFmpeg completed without output metadata.")
-    print_stage_update(14, "FFmpeg render", "completed", str(output.output_path), started)
-    print_stage_update(15, "Render-result persistence", "completed", str(json_path), started)
-    print_success_summary(result, run_directory, json_path, markdown_path, perf_counter() - started)
+    print_stage_update(
+        14 + stage_offset, "FFmpeg render", "completed", str(output.output_path), started
+    )
+    final_stage = 15 + stage_offset
+    print_stage_update(
+        final_stage, "Render-result persistence", "completed", str(json_path), started
+    )
+    print_success_summary(
+        result,
+        run_directory,
+        json_path,
+        markdown_path,
+        perf_counter() - started,
+        final_stage,
+    )
     return 0
 
 
@@ -320,7 +394,7 @@ async def _stage[StageResult](
 
 def print_stage_update(number: int, name: str, status: str, summary: str, elapsed: float) -> None:
     """Print concise checkpoints without prompts, scripts, or provider responses."""
-    print(f"[{number}/15] {name}: {status} ({summary}; {elapsed:.2f}s)")
+    print(f"[{number}/{FIXTURE_MAX_STAGE_COUNT}] {name}: {status} ({summary}; {elapsed:.2f}s)")
 
 
 def print_success_summary(
@@ -329,6 +403,7 @@ def print_success_summary(
     json_path: Path,
     markdown_path: Path,
     elapsed: float,
+    completed_stage_count: int,
 ) -> None:
     """Report output metadata only after a validated completed render."""
     output = result.output
@@ -344,7 +419,7 @@ def print_success_summary(
     print(f"Checksum: {output.checksum_sha256[:12]}")
     print(f"Total elapsed time: {elapsed:.2f}s")
     print(f"Run directory: {run_directory}")
-    print("Completed stage count: 15")
+    print(f"Completed stage count: {completed_stage_count}")
     print(f"Warning count: {len(result.warnings)}")
     print(f"Render-result JSON: {json_path}")
     print(f"Render-result Markdown: {markdown_path}")
