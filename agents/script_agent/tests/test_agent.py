@@ -177,6 +177,19 @@ async def test_script_agent_includes_explicit_length_policy_in_prompt_context(
     assert "target approximately 38 seconds" in client.request.template
     assert "override any conflicting duration or length guidance" in client.request.template
     assert (
+        "TOTAL SPOKEN WORDS = hook + intro + every sections[].narration + conclusion + CTA + "
+        "disclaimer" in client.request.template
+    )
+    assert "Do not put the total budget only in section narration" in client.request.template
+    assert (
+        "hook 8-12 words; intro 0-8 words; section narration combined 45-60 words"
+        in client.request.template
+    )
+    assert (
+        "Deterministic duration is derived from the complete spoken-word total"
+        in client.request.template
+    )
+    assert (
         "estimated_duration_minutes"
         not in client.request.template.split("ACTIVE PRODUCTION CONSTRAINTS:")[-1]
     )

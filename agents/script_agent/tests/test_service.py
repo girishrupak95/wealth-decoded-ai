@@ -97,6 +97,44 @@ def make_script_with_narration(narration: str) -> VideoScript:
     )
 
 
+def make_total_word_script(
+    *,
+    hook_words: int,
+    intro_words: int,
+    section_words: int,
+    conclusion_words: int,
+    cta_words: int,
+    disclaimer_words: int,
+    reported_words: int,
+    reported_duration: int,
+) -> VideoScript:
+    def words(count: int) -> str:
+        return "word " * count
+
+    section = ScriptSection(
+        section_id="section",
+        heading="Evidence",
+        narration=words(section_words),
+        estimated_duration_seconds=10,
+        visual_direction="Visual",
+        on_screen_text=[],
+        source_references=["Consumer finance guidance"],
+        verification_required=False,
+    )
+    return VideoScript(
+        title="Why Your Emergency Fund Matters",
+        hook=words(hook_words),
+        intro=words(intro_words),
+        sections=[section, section, section, section],
+        conclusion=words(conclusion_words),
+        cta=words(cta_words),
+        disclaimer=words(disclaimer_words),
+        total_estimated_duration_seconds=reported_duration,
+        estimated_word_count=reported_words,
+        verification_notes=[],
+    )
+
+
 class MockScriptGenerator:
     async def generate(
         self,
@@ -273,6 +311,54 @@ async def test_service_combines_source_and_length_corrections_in_one_retry(tmp_p
     assert "Altered Federal Reserve reference" in feedback
     assert "Consumer finance guidance" in feedback
     assert "character-for-character" in feedback
-    assert "Calculated word count:" in feedback
+    assert "Actual total spoken words:" in feedback
     assert "Required word range: 75-110" in feedback
     assert "Required duration range: 30-45 seconds" in feedback
+
+
+@pytest.mark.asyncio
+async def test_short_policy_rejects_total_words_above_maximum_and_reports_breakdown(
+    tmp_path: Path,
+) -> None:
+    over_budget = make_total_word_script(
+        hook_words=12,
+        intro_words=10,
+        section_words=17,
+        conclusion_words=10,
+        cta_words=8,
+        disclaimer_words=21,
+        reported_words=93,
+        reported_duration=38,
+    )
+    compliant = make_total_word_script(
+        hook_words=10,
+        intro_words=5,
+        section_words=13,
+        conclusion_words=8,
+        cta_words=5,
+        disclaimer_words=10,
+        reported_words=999,
+        reported_duration=999,
+    )
+    generator = PolicyAwareSequencedScriptGenerator([over_budget, compliant])
+    service = ScriptGenerationService(
+        generator,
+        tmp_path,
+        policy=short_production_fixture_policy(),
+        max_retries=1,
+    )
+
+    artifacts = await service.generate(make_concept(), make_research())
+
+    assert artifacts.script.estimated_word_count == 90
+    assert artifacts.script.total_estimated_duration_seconds == 37
+    assert all(
+        section.source_references == ["Consumer finance guidance"]
+        for section in artifacts.script.sections
+    )
+    feedback = generator.feedback[1]
+    assert feedback is not None
+    assert "Actual total spoken words: 129" in feedback
+    assert "Remove at least 19 words across all spoken fields." in feedback
+    assert "hook=12, intro=10, section narration combined=68" in feedback
+    assert "conclusion=10, CTA=8, disclaimer=21" in feedback

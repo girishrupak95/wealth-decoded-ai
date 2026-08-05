@@ -30,4 +30,6 @@ $active_script_constraints
 
 Every source_references entry must be copied character-for-character from ALLOWED_SOURCE_REFERENCES. Do not use internal research field names as citations. If no exact reference applies, use [] and set verification_required=true.
 
+Count the active word budget across every spoken field, not section narration alone. The active constraints define the exact spoken fields and deterministic duration calculation.
+
 Return only one valid JSON object matching VideoScript.

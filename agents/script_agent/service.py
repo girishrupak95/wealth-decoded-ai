@@ -23,7 +23,7 @@ from shared.constants import (
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.video_concept import VideoConcept
-from shared.models.video_script import ScriptSection, VideoScript
+from shared.models.video_script import ScriptSection, VideoScript, count_narration_words
 
 
 class ScriptGenerator(Protocol):
@@ -161,13 +161,45 @@ class ScriptGenerationService:
         )
 
     def _length_feedback(self, script: VideoScript) -> str:
+        breakdown = self._spoken_word_breakdown(script)
+        word_count = script.estimated_word_count
+        if word_count > self._policy.max_words:
+            boundary_feedback = (
+                f"Remove at least {word_count - self._policy.max_words} words across all "
+                "spoken fields."
+            )
+        elif word_count < self._policy.min_words:
+            boundary_feedback = (
+                f"Add at least {self._policy.min_words - word_count} words across all spoken "
+                "fields."
+            )
+        else:
+            boundary_feedback = (
+                "The spoken-word total is within bounds; correct pacing without adding words."
+            )
         return (
-            "Rewrite the entire script within the active policy. Calculated word count: "
-            f"{script.estimated_word_count}. Calculated duration: "
+            "Rewrite all spoken fields within the active policy; do not alter citations merely to "
+            "reduce length. Actual total spoken words: "
+            f"{word_count}. Calculated duration: "
             f"{script.total_estimated_duration_seconds} seconds. Required word range: "
             f"{self._policy.min_words}-{self._policy.max_words}. Required duration range: "
-            f"{self._policy.min_duration_seconds}-{self._policy.max_duration_seconds} seconds."
+            f"{self._policy.min_duration_seconds}-{self._policy.max_duration_seconds} seconds. "
+            f"Spoken-word breakdown: hook={breakdown['hook']}, intro={breakdown['intro']}, "
+            f"section narration combined={breakdown['sections']}, "
+            f"conclusion={breakdown['conclusion']}, "
+            f"CTA={breakdown['cta']}, disclaimer={breakdown['disclaimer']}. {boundary_feedback}"
         )
+
+    @staticmethod
+    def _spoken_word_breakdown(script: VideoScript) -> dict[str, int]:
+        return {
+            "hook": count_narration_words([script.hook]),
+            "intro": count_narration_words([script.intro]),
+            "sections": count_narration_words([section.narration for section in script.sections]),
+            "conclusion": count_narration_words([script.conclusion]),
+            "cta": count_narration_words([script.cta]),
+            "disclaimer": count_narration_words([script.disclaimer]),
+        }
 
     @staticmethod
     def _source_feedback(invalid_references: set[str], allowed_references: list[str]) -> str:
