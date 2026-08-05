@@ -14,6 +14,7 @@ from shared.ai.knowledge_loader import KnowledgeLoader
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
+from shared.exceptions.ai import OutputValidationError
 
 
 class AgentRequest(BaseModel):
@@ -74,6 +75,10 @@ class BaseAgent(ABC):
                 if request.system_prompt_name
                 else None
             )
+            schema_instruction = self._build_output_schema_instruction()
+            system_prompt = (
+                f"{system_prompt}\n\n{schema_instruction}" if system_prompt else schema_instruction
+            )
             raw_output = await self._llm_client.generate(
                 LLMRequest(
                     template=user_prompt,
@@ -83,6 +88,15 @@ class BaseAgent(ABC):
                 )
             )
             output = self._output_validator.validate(raw_output, self.output_schema)
+        except OutputValidationError as error:
+            event_logger.warning(
+                "agent_output_validation_failed",
+                duration=round((perf_counter() - started_at) * 1000, 3),
+                status="failed",
+                exception_type=type(error).__name__,
+                error_count=getattr(error, "error_count", None),
+            )
+            raise
         except Exception:
             event_logger.exception(
                 "agent_execution_failed",
@@ -93,3 +107,14 @@ class BaseAgent(ABC):
         duration = round((perf_counter() - started_at) * 1000, 3)
         event_logger.info("agent_execution_finished", duration=duration, status="succeeded")
         return AgentExecution(output=output, execution_id=execution_id, duration_ms=duration)
+
+    def _build_output_schema_instruction(self) -> str:
+        schema = json.dumps(self.output_schema.model_json_schema(), sort_keys=True)
+        return (
+            "Return exactly one valid JSON object. The JSON must conform exactly to the "
+            "supplied JSON Schema. Use every required field. Do not rename fields. Do not "
+            "include fields not present in the schema. Do not include Markdown fences. Do not "
+            "include commentary before or after the JSON. Numeric values must be JSON numbers. "
+            "Arrays must use the expected item structure.\n\nJSON Schema:\n"
+            f"{schema}"
+        )

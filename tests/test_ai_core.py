@@ -1,10 +1,14 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+from loguru import logger
 from pydantic import BaseModel
 
+from shared.ai.base_agent import AgentRequest, BaseAgent
 from shared.ai.knowledge_loader import KnowledgeLoader
+from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
 from shared.exceptions.ai import OutputValidationError
@@ -12,6 +16,57 @@ from shared.exceptions.ai import OutputValidationError
 
 class Payload(BaseModel):
     value: str
+
+
+class AgentPayload(BaseModel):
+    value: str
+
+
+class RecordingLLMClient(LLMClient):
+    def __init__(self, output: str) -> None:
+        super().__init__()
+        self.output = output
+        self.request: LLMRequest | None = None
+
+    async def generate(self, request: LLMRequest) -> str:
+        self.request = request
+        return self.output
+
+    async def health(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+
+class SchemaAgent(BaseAgent):
+    @property
+    def name(self) -> str:
+        return "schema-agent"
+
+    @property
+    def output_schema(self) -> type[BaseModel]:
+        return AgentPayload
+
+
+def build_schema_agent(tmp_path: Path, output: str) -> tuple[SchemaAgent, RecordingLLMClient]:
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "user.md").write_text("User prompt: $value", encoding="utf-8")
+    (prompts / "system.md").write_text("System prompt: $value", encoding="utf-8")
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "rule.md").write_text("Knowledge remains unchanged", encoding="utf-8")
+    llm_client = RecordingLLMClient(output)
+    return (
+        SchemaAgent(
+            llm_client=llm_client,
+            prompt_loader=PromptLoader(prompts),
+            knowledge_loader=KnowledgeLoader(knowledge),
+            output_validator=OutputValidator(),
+        ),
+        llm_client,
+    )
 
 
 def test_prompt_loader_reads_templates(tmp_path: Path) -> None:
@@ -37,3 +92,58 @@ def test_output_validator_validates_pydantic_schema() -> None:
 def test_output_validator_rejects_invalid_json() -> None:
     with pytest.raises(OutputValidationError):
         OutputValidator().validate("invalid", Payload)
+
+
+@pytest.mark.asyncio
+async def test_base_agent_appends_generated_schema_without_mutating_request_data(
+    tmp_path: Path,
+) -> None:
+    agent, llm_client = build_schema_agent(tmp_path, '{"value": "valid"}')
+    context: dict[str, Any] = {"value": "unchanged"}
+
+    await agent.execute(
+        AgentRequest(prompt_name="user.md", system_prompt_name="system.md", context=context)
+    )
+
+    assert llm_client.request is not None
+    assert llm_client.request.template == "User prompt: unchanged"
+    assert llm_client.request.context == context
+    assert llm_client.request.knowledge == {"rule.md": "Knowledge remains unchanged"}
+    system_template = llm_client.request.system_template
+    assert system_template is not None
+    assert system_template.startswith("System prompt: unchanged\n\n")
+    assert json.dumps(AgentPayload.model_json_schema(), sort_keys=True) in system_template
+    assert "Do not include fields not present in the schema." in system_template
+    assert "Do not include Markdown fences." in system_template
+
+
+@pytest.mark.asyncio
+async def test_base_agent_creates_schema_system_instruction_without_system_prompt(
+    tmp_path: Path,
+) -> None:
+    agent, llm_client = build_schema_agent(tmp_path, '{"value": "valid"}')
+
+    await agent.execute(AgentRequest(prompt_name="user.md", context={"value": "unchanged"}))
+
+    assert llm_client.request is not None
+    system_template = llm_client.request.system_template
+    assert system_template is not None
+    assert system_template.startswith("Return exactly one valid JSON object.")
+    assert llm_client.request.template == "User prompt: unchanged"
+
+
+@pytest.mark.asyncio
+async def test_base_agent_rejects_extra_output_without_logging_raw_response(tmp_path: Path) -> None:
+    raw_output = '{"value": "valid", "invented": "private output"}'
+    agent, _ = build_schema_agent(tmp_path, raw_output)
+    log_messages: list[str] = []
+    handler_id = logger.add(log_messages.append, format="{message}")
+    try:
+        with pytest.raises(OutputValidationError):
+            await agent.execute(AgentRequest(prompt_name="user.md", context={"value": "unchanged"}))
+    finally:
+        logger.remove(handler_id)
+
+    messages = "".join(log_messages)
+    assert "agent_output_validation_failed" in messages
+    assert "private output" not in messages
