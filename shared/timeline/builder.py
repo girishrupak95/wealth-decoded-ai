@@ -68,6 +68,8 @@ class TimelineBuilderService:
         voiceover_manifest: VoiceoverManifest,
         visual_asset_manifest: VisualAssetManifest,
         voiceover_segment_paths: dict[str, Path] | None = None,
+        primary_duration_seconds: float | None = None,
+        maximum_primary_duration_seconds: float | None = None,
     ) -> Timeline:
         """Map source contracts deterministically into validated production tracks.
 
@@ -77,6 +79,12 @@ class TimelineBuilderService:
         """
         warnings: list[str] = ["Captions are not yet generated."]
         video_track = self._video_track(storyboard, visual_asset_manifest, warnings)
+        if primary_duration_seconds is not None:
+            video_track = self._retime_video_track(
+                video_track,
+                primary_duration_seconds,
+                maximum_primary_duration_seconds,
+            )
         narration_track = self._narration_track(
             voiceover_manifest,
             warnings,
@@ -351,6 +359,32 @@ class TimelineBuilderService:
             name="Narration",
             clips=clips,
         )
+
+    @staticmethod
+    def _retime_video_track(
+        track: TimelineTrack,
+        duration_seconds: float,
+        maximum_duration_seconds: float | None,
+    ) -> TimelineTrack:
+        """Create a timeline-only continuous video track sized to measured narration."""
+        if duration_seconds <= 0:
+            raise TimelineValidationError("Authoritative narration duration must be positive.")
+        if maximum_duration_seconds is not None and duration_seconds > maximum_duration_seconds:
+            raise TimelineValidationError("Narration exceeds the active production duration limit.")
+        original_duration = max((clip.end_time_seconds for clip in track.clips), default=0.0)
+        if original_duration <= 0:
+            raise TimelineValidationError("Primary video track has no duration to retime.")
+        scale = duration_seconds / original_duration
+        clips = [
+            clip.model_copy(
+                update={
+                    "start_time_seconds": clip.start_time_seconds * scale,
+                    "end_time_seconds": clip.end_time_seconds * scale,
+                }
+            )
+            for clip in track.clips
+        ]
+        return track.model_copy(update={"clips": clips})
 
     def _sound_effect_track(self, storyboard: Storyboard) -> TimelineTrack | None:
         clips: list[TimelineClip] = []

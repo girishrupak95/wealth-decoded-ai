@@ -104,7 +104,9 @@ def review(approved: bool = True) -> ScriptReview:
     )
 
 
-def service(tmp_path: Path, provider: Provider) -> VoiceoverGenerationService:
+def service(
+    tmp_path: Path, provider: Provider, *, include_disclaimer_in_audio: bool = True
+) -> VoiceoverGenerationService:
     return VoiceoverGenerationService(
         provider,
         Processor(),
@@ -116,6 +118,7 @@ def service(tmp_path: Path, provider: Provider) -> VoiceoverGenerationService:
         voice_settings=VoiceSettings(
             stability=0.5, similarity_boost=0.75, style=0, use_speaker_boost=True
         ),
+        include_disclaimer_in_audio=include_disclaimer_in_audio,
     )
 
 
@@ -149,6 +152,28 @@ async def test_approved_review_generates_audio_manifest_and_exports(tmp_path: Pa
         item.word_count for item in result.manifest.segments
     )
     assert all(item.checksum_sha256 for item in result.manifest.segments)
+    assert all(item.generated_duration_seconds is not None for item in result.manifest.segments)
+    assert result.manifest.disclaimer_included_in_audio
+    assert result.manifest.disclaimer_text == script().disclaimer
+    assert result.manifest.total_pause_duration_seconds == pytest.approx(3.1)
+    assert result.manifest.generated_duration_seconds == pytest.approx(11.1)
+
+
+@pytest.mark.asyncio
+async def test_short_form_option_excludes_disclaimer_audio_but_keeps_manifest_metadata(
+    tmp_path: Path,
+) -> None:
+    provider = Provider()
+    result = await service(tmp_path, provider, include_disclaimer_in_audio=False).generate(
+        script(), review(), datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert provider.calls == 7
+    assert not result.manifest.disclaimer_included_in_audio
+    assert result.manifest.disclaimer_text == script().disclaimer
+    assert all(item.segment_type.value != "disclaimer" for item in result.manifest.segments)
+    assert result.manifest.total_pause_duration_seconds == pytest.approx(2.85)
+    assert result.manifest.generated_duration_seconds == pytest.approx(9.85)
 
 
 @pytest.mark.asyncio

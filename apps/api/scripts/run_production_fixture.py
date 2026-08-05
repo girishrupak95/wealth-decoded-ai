@@ -38,6 +38,7 @@ from shared.models.rendering import (
 from shared.models.script_policy import short_production_fixture_policy
 from shared.models.timeline import RenderReadiness as TimelineRenderReadiness
 from shared.models.timeline import Timeline
+from shared.models.voiceover import VoiceoverManifest
 from shared.rendering.ffmpeg_commands import FFmpegCommandBuilder
 from shared.rendering.ffmpeg_process import FFmpegProcessRunner
 from shared.rendering.ffmpeg_renderer import FFmpegRenderer
@@ -174,6 +175,7 @@ def build_production_dependencies(
         root,
         script_policy=short_production_fixture_policy(),
         visual_live_generation=False if skip_images else None,
+        include_disclaimer_in_audio=False,
     )
     settings = FFmpegRenderSettings()
     builder = FFmpegCommandBuilder(
@@ -283,6 +285,11 @@ async def run_pipeline(
         "Voiceover generation",
         pipeline.voiceover_service.generate(script_artifacts.script, review_artifacts.review),
     )
+    duration_message = _short_form_duration_rejection(voiceover.manifest)
+    if duration_message is not None:
+        print(duration_message)
+        print(f"Production-run directory: {run_directory}")
+        return 1
     visual_result = await _stage(
         9 + stage_offset,
         "Visual asset generation",
@@ -310,6 +317,8 @@ async def run_pipeline(
         voiceover_manifest=voiceover.manifest,
         visual_asset_manifest=persisted_visual.manifest,
         voiceover_segment_paths=segment_paths,
+        primary_duration_seconds=voiceover.manifest.generated_duration_seconds,
+        maximum_primary_duration_seconds=short_production_fixture_policy().max_duration_seconds,
     )
     print_stage_update(
         12 + stage_offset,
@@ -523,6 +532,31 @@ def _safe_error(error: Exception) -> str:
     if any(key in message.lower() for key in ("api_key", "token", "secret")):
         return "Production fixture failed."
     return message
+
+
+def _short_form_duration_rejection(manifest: VoiceoverManifest) -> str | None:
+    """Return a safe pre-visual rejection for narration outside the fixture policy."""
+    actual = manifest.generated_duration_seconds
+    if actual is None:
+        raise ProductionFixtureError("Voiceover manifest has no measured narration duration.")
+    policy = short_production_fixture_policy()
+    if actual > policy.max_duration_seconds:
+        overage = actual - policy.max_duration_seconds
+        disclaimer = "yes" if manifest.disclaimer_included_in_audio else "no"
+        return (
+            f"Generated narration is {actual:.2f} seconds, exceeding the "
+            f"{policy.max_duration_seconds}-second short-form limit. "
+            f"Actual duration: {actual:.2f} seconds; maximum duration: "
+            f"{policy.max_duration_seconds} seconds; overage: {overage:.2f} seconds; "
+            f"disclaimer included: {disclaimer}; total pause duration: "
+            f"{manifest.total_pause_duration_seconds:.2f} seconds."
+        )
+    if actual < policy.min_duration_seconds:
+        return (
+            f"Generated narration is {actual:.2f} seconds, below the "
+            f"{policy.min_duration_seconds}-second short-form minimum."
+        )
+    return None
 
 
 if __name__ == "__main__":

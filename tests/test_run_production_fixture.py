@@ -4,6 +4,7 @@ import importlib
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,12 +13,24 @@ from pytest import CaptureFixture, MonkeyPatch
 
 from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.video_script import ScriptSection, VideoScript
+from shared.models.voiceover import (
+    NarrationSegment,
+    NarrationSegmentType,
+    VoiceoverManifest,
+    VoiceSettings,
+)
 
 cli = importlib.import_module("apps.api.scripts.run_production_fixture")
 
 
 class ArtifactStub(BaseModel):
     """Minimal persistable model for pipeline orchestration tests."""
+
+
+class FixtureDependencies(Protocol):
+    """The injected pipeline surface exercised by fixture orchestration tests."""
+
+    pipeline: SimpleNamespace
 
 
 def unexpected_dependency_construction(*_: object, **__: object) -> None:
@@ -146,7 +159,9 @@ def review(*, approved: bool, title: str) -> ScriptReview:
     )
 
 
-def pipeline_dependencies(reviews: list[ScriptReview]) -> tuple[object, dict[str, MagicMock]]:
+def pipeline_dependencies(
+    reviews: list[ScriptReview],
+) -> tuple[FixtureDependencies, dict[str, MagicMock]]:
     """Provide no-network fixture services and stop after approval at storyboard generation."""
     initial_script = script("Initial script")
     revised_script = script("Revised script")
@@ -187,6 +202,48 @@ def pipeline_dependencies(reviews: list[ScriptReview]) -> tuple[object, dict[str
         "voiceover": pipeline.voiceover_service,
         "visual": pipeline.visual_service,
     }
+
+
+def voiceover_manifest(duration: float) -> VoiceoverManifest:
+    """Create an already-persisted measured voiceover manifest for duration-gate tests."""
+    return VoiceoverManifest(
+        title="Initial script",
+        provider="mock",
+        voice_id="voice",
+        model_id="model",
+        output_format="mp3_44100_128",
+        voice_settings=VoiceSettings(
+            stability=0.5,
+            similarity_boost=0.5,
+            style=0,
+            use_speaker_boost=True,
+        ),
+        segments=[
+            NarrationSegment(
+                segment_id="001-hook",
+                segment_type=NarrationSegmentType.HOOK,
+                script_section_id=None,
+                sequence_number=1,
+                text="Measured narration.",
+                character_count=0,
+                word_count=0,
+                expected_duration_seconds=int(duration),
+                pause_after_ms=0,
+                audio_filename="001-hook.mp3",
+                generated_duration_seconds=duration,
+            )
+        ],
+        total_character_count=0,
+        total_word_count=0,
+        expected_duration_seconds=0,
+        generated_duration_seconds=None,
+        combined_audio_filename="voiceover.mp3",
+        generated_at=datetime(2026, 8, 4, tzinfo=UTC),
+        manifest_version="1.0",
+        warnings=[],
+        disclaimer_included_in_audio=False,
+        disclaimer_text="Educational disclaimer.",
+    )
 
 
 @pytest.mark.asyncio
@@ -286,3 +343,44 @@ async def test_revision_failure_stops_before_a_second_review_or_downstream_work(
     mocks["storyboard"].generate.assert_not_awaited()
     mocks["voiceover"].generate.assert_not_awaited()
     mocks["visual"].generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_overlong_measured_voiceover_stops_before_visual_generation(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    initial = script("Initial script")
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title=initial.title)])
+    dependencies.pipeline.storyboard_service.generate = AsyncMock(
+        return_value=SimpleNamespace(storyboard=ArtifactStub())
+    )
+    dependencies.pipeline.voiceover_service.generate = AsyncMock(
+        return_value=SimpleNamespace(manifest=voiceover_manifest(46), output_directory=tmp_path)
+    )
+
+    result = await cli.run_pipeline(dependencies, tmp_path, skip_images=True)
+
+    assert result == 1
+    mocks["visual"].generate.assert_not_awaited()
+    output = capsys.readouterr().out
+    assert "Generated narration is 46.00 seconds" in output
+    assert "overage: 1.00 seconds" in output
+    assert "disclaimer included: no" in output
+
+
+@pytest.mark.asyncio
+async def test_in_policy_measured_voiceover_reaches_visual_generation(tmp_path: Path) -> None:
+    initial = script("Initial script")
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title=initial.title)])
+    dependencies.pipeline.storyboard_service.generate = AsyncMock(
+        return_value=SimpleNamespace(storyboard=ArtifactStub())
+    )
+    dependencies.pipeline.voiceover_service.generate = AsyncMock(
+        return_value=SimpleNamespace(manifest=voiceover_manifest(40), output_directory=tmp_path)
+    )
+    mocks["visual"].generate.side_effect = RuntimeError("visual generation reached")
+
+    with pytest.raises(RuntimeError, match="visual generation reached"):
+        await cli.run_pipeline(dependencies, tmp_path, skip_images=True)
+
+    mocks["visual"].generate.assert_awaited_once()

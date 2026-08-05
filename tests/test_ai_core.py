@@ -147,3 +147,95 @@ async def test_base_agent_rejects_extra_output_without_logging_raw_response(tmp_
     messages = "".join(log_messages)
     assert "agent_output_validation_failed" in messages
     assert "private output" not in messages
+
+
+@pytest.mark.asyncio
+async def test_debug_raw_output_is_not_written_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WEALTH_DEBUG_SAVE_RAW_LLM", raising=False)
+    agent, _ = build_schema_agent(tmp_path, '{"value": "valid"}')
+
+    await agent.execute(AgentRequest(prompt_name="user.md", context={"value": "unchanged"}))
+
+    assert not (tmp_path / "generated" / "debug" / "schema_agent-raw.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_debug_raw_output_pretty_prints_json_and_uses_agent_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WEALTH_DEBUG_SAVE_RAW_LLM", "1")
+    agent, _ = build_schema_agent(tmp_path, '{"value":"valid"}')
+
+    await agent.execute(AgentRequest(prompt_name="user.md", context={"value": "unchanged"}))
+
+    path = tmp_path / "generated" / "debug" / "schema_agent-raw.json"
+    assert agent._debug_output_path() == path
+    assert path.read_text(encoding="utf-8") == '{\n  "value": "valid"\n}'
+
+
+@pytest.mark.asyncio
+async def test_debug_raw_output_preserves_invalid_json_and_validation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WEALTH_DEBUG_SAVE_RAW_LLM", "1")
+    raw_output = "not valid json"
+    agent, _ = build_schema_agent(tmp_path, raw_output)
+
+    with pytest.raises(OutputValidationError):
+        await agent.execute(AgentRequest(prompt_name="user.md", context={"value": "unchanged"}))
+
+    assert (tmp_path / "generated" / "debug" / "schema_agent-raw.json").read_text(
+        encoding="utf-8"
+    ) == raw_output
+
+
+@pytest.mark.asyncio
+async def test_debug_raw_output_write_failure_does_not_interrupt_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WEALTH_DEBUG_SAVE_RAW_LLM", "1")
+    agent, _ = build_schema_agent(tmp_path, '{"value": "valid"}')
+    log_messages: list[str] = []
+    handler_id = logger.add(log_messages.append, format="{message}")
+    original_write_text = Path.write_text
+
+    def failing_write_text(self: Path, data: str, encoding: str) -> int:
+        if self.name == "schema_agent-raw.json":
+            raise OSError("unavailable")
+        return original_write_text(self, data, encoding=encoding)
+
+    monkeypatch.setattr(Path, "write_text", failing_write_text)
+    try:
+        execution = await agent.execute(
+            AgentRequest(prompt_name="user.md", context={"value": "unchanged"})
+        )
+    finally:
+        logger.remove(handler_id)
+
+    assert execution.output == {"value": "valid"}
+    assert "debug_output_save_failed" in "".join(log_messages)
+
+
+@pytest.mark.asyncio
+async def test_debug_raw_output_overwrites_previous_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WEALTH_DEBUG_SAVE_RAW_LLM", "1")
+    agent, llm_client = build_schema_agent(tmp_path, '{"value": "first"}')
+    request = AgentRequest(prompt_name="user.md", context={"value": "unchanged"})
+
+    await agent.execute(request)
+    llm_client.output = '{"value": "second"}'
+    await agent.execute(request)
+
+    content = (tmp_path / "generated" / "debug" / "schema_agent-raw.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"second"' in content and '"first"' not in content

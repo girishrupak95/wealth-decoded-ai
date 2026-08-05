@@ -91,6 +91,9 @@ class VoiceoverManifest(BaseModel):
     total_word_count: int = Field(ge=0)
     expected_duration_seconds: int = Field(ge=0)
     generated_duration_seconds: float | None = Field(default=None, ge=0)
+    total_pause_duration_seconds: float = Field(default=0, ge=0)
+    disclaimer_included_in_audio: bool = True
+    disclaimer_text: str = ""
     combined_audio_filename: str
     generated_at: datetime
     manifest_version: str
@@ -110,6 +113,14 @@ class VoiceoverManifest(BaseModel):
         self.expected_duration_seconds = sum(
             segment.expected_duration_seconds for segment in self.segments
         )
+        self.total_pause_duration_seconds = (
+            sum(segment.pause_after_ms for segment in self.segments) / 1_000
+        )
+        if all(segment.generated_duration_seconds is not None for segment in self.segments):
+            self.generated_duration_seconds = (
+                sum(segment.generated_duration_seconds or 0 for segment in self.segments)
+                + self.total_pause_duration_seconds
+            )
         return self
 
 

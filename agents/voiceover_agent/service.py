@@ -51,7 +51,9 @@ class AudioProcessor(Protocol):
     async def concatenate(self, input_paths: list[Path], output_path: Path) -> Path: ...
 
 
-def script_to_segments(script: VideoScript, extension: str) -> list[NarrationSegment]:
+def script_to_segments(
+    script: VideoScript, extension: str, *, include_disclaimer_in_audio: bool = True
+) -> list[NarrationSegment]:
     """Split a script deterministically for independent TTS synthesis and alignment."""
     normalized_extension = extension if extension.startswith(".") else f".{extension}"
     values: list[tuple[NarrationSegmentType, str | None, str, int]] = [
@@ -73,11 +75,17 @@ def script_to_segments(script: VideoScript, extension: str) -> list[NarrationSeg
             DEFAULT_VOICEOVER_CONCLUSION_PAUSE_MS,
         ),
         (NarrationSegmentType.CTA, None, script.cta, DEFAULT_VOICEOVER_CTA_PAUSE_MS),
-        (
-            NarrationSegmentType.DISCLAIMER,
-            None,
-            script.disclaimer,
-            DEFAULT_VOICEOVER_DISCLAIMER_PAUSE_MS,
+        *(
+            [
+                (
+                    NarrationSegmentType.DISCLAIMER,
+                    None,
+                    script.disclaimer,
+                    DEFAULT_VOICEOVER_DISCLAIMER_PAUSE_MS,
+                )
+            ]
+            if include_disclaimer_in_audio
+            else []
         ),
     ]
     segments: list[NarrationSegment] = []
@@ -126,6 +134,7 @@ class VoiceoverGenerationService:
         model_id: str,
         output_format: str,
         voice_settings: VoiceSettings,
+        include_disclaimer_in_audio: bool = True,
     ) -> None:
         self._provider = provider
         self._processor = processor
@@ -135,6 +144,7 @@ class VoiceoverGenerationService:
         self._model_id = model_id
         self._output_format = output_format
         self._voice_settings = voice_settings
+        self._include_disclaimer_in_audio = include_disclaimer_in_audio
         self._logger = logger.bind(component=self.__class__.__name__)
 
     async def generate(
@@ -155,7 +165,11 @@ class VoiceoverGenerationService:
         segments_directory = directory / "segments"
         await asyncio.to_thread(segments_directory.mkdir, parents=True, exist_ok=False)
         generated_segments: list[NarrationSegment] = []
-        for segment in script_to_segments(script, extension):
+        for segment in script_to_segments(
+            script,
+            extension,
+            include_disclaimer_in_audio=self._include_disclaimer_in_audio,
+        ):
             path = segments_directory / segment.audio_filename
             audio = await self._provider.synthesize(
                 segment.text,
@@ -199,7 +213,10 @@ class VoiceoverGenerationService:
             total_character_count=0,
             total_word_count=0,
             expected_duration_seconds=0,
-            generated_duration_seconds=await self._processor.duration_seconds(combined_path),
+            generated_duration_seconds=None,
+            total_pause_duration_seconds=0,
+            disclaimer_included_in_audio=self._include_disclaimer_in_audio,
+            disclaimer_text=script.disclaimer,
             combined_audio_filename=combined_path.name,
             generated_at=timestamp,
             manifest_version=VOICEOVER_MANIFEST_VERSION,
@@ -273,6 +290,8 @@ class VoiceoverGenerationService:
             f"- Total characters: {manifest.total_character_count}",
             f"- Expected duration: {manifest.expected_duration_seconds} seconds",
             f"- Generated duration: {manifest.generated_duration_seconds} seconds",
+            f"- Total pause duration: {manifest.total_pause_duration_seconds} seconds",
+            f"- Disclaimer included in audio: {manifest.disclaimer_included_in_audio}",
             f"- Combined output file: {manifest.combined_audio_filename}",
             "",
             "## Segments",

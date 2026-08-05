@@ -72,14 +72,14 @@ def create_client(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-5-mini", "gpt-5", "gpt-5-nano"])
-async def test_gpt_five_models_omit_optional_parameters(
+@pytest.mark.parametrize("model", ["gpt-5-mini", "gpt-5", "gpt-5.6"])
+async def test_gpt_five_models_omit_temperature_and_include_output_limit(
     monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
     client, responses = create_client(monkeypatch, settings(model=model))
 
     assert await client.generate(LLMRequest(template="request")) == "validated output"
-    assert responses.requests == [{"model": model, "input": "request"}]
+    assert responses.requests == [{"model": model, "input": "request", "max_output_tokens": 4000}]
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_legacy_model_includes_configured_optional_parameters(
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_uses_minimal_safe_parameters(
+async def test_unknown_model_omits_temperature_and_includes_output_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, responses = create_client(monkeypatch, settings(model="future-model", temperature=None))
@@ -113,7 +113,7 @@ async def test_unknown_model_uses_minimal_safe_parameters(
     assert request["model"] == "future-model" and request["input"] == "request"
     assert request["instructions"] == "system"
     assert "temperature" not in request and "max_tokens" not in request
-    assert "max_output_tokens" not in request
+    assert request["max_output_tokens"] == 4000
 
 
 @pytest.mark.asyncio
@@ -127,6 +127,35 @@ async def test_successful_output_extraction_is_unchanged(
     )
 
     assert await client.generate(LLMRequest(template="structured JSON")) == '{"result": "valid"}'
+
+
+@pytest.mark.asyncio
+async def test_incomplete_output_token_response_raises_without_logging_raw_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_output = '{"truncated":"private output"'
+    client, _ = create_client(
+        monkeypatch,
+        settings(model="gpt-5-mini"),
+        SimpleNamespace(
+            output_text=raw_output,
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        ),
+    )
+    logged_messages: list[str] = []
+    handler_id = logger.add(logged_messages.append, format="{message}")
+    try:
+        with pytest.raises(OpenAIRequestError, match="output-token limit"):
+            await client.generate(LLMRequest(template="private prompt"))
+    finally:
+        logger.remove(handler_id)
+
+    messages = "".join(logged_messages)
+    assert "openai_response_incomplete" in messages
+    assert raw_output not in messages
+    assert "private prompt" not in messages
+    assert "test-api-key" not in messages
 
 
 @pytest.mark.asyncio

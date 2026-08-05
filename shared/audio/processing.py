@@ -58,23 +58,26 @@ class FFmpegAudioProcessor:
 
     async def generate_silence(self, duration_ms: int, output_path: Path) -> Path:
         """Generate an MP3-compatible silence track for a requested pause."""
-        temporary = output_path.with_suffix(f"{output_path.suffix}.tmp")
-        await self._run(
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=44100:cl=mono",
-            "-t",
-            f"{duration_ms / 1000:.3f}",
-            "-c:a",
-            "libmp3lame",
-            "-b:a",
-            "128k",
-            str(temporary),
-        )
-        await asyncio.to_thread(os.replace, temporary, output_path)
+        temporary = self._ffmpeg_temporary_output(output_path)
+        try:
+            await self._run(
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono",
+                "-t",
+                f"{duration_ms / 1000:.3f}",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                str(temporary),
+            )
+            await asyncio.to_thread(os.replace, temporary, output_path)
+        finally:
+            await asyncio.to_thread(temporary.unlink, missing_ok=True)
         return output_path
 
     async def concatenate(self, input_paths: list[Path], output_path: Path) -> Path:
@@ -86,7 +89,7 @@ class FFmpegAudioProcessor:
         list_path = output_path.with_suffix(".concat.txt")
         content = "".join(f"file '{path.resolve()}'\n" for path in input_paths)
         await asyncio.to_thread(list_path.write_text, content, "utf-8")
-        temporary = output_path.with_suffix(f"{output_path.suffix}.tmp")
+        temporary = self._ffmpeg_temporary_output(output_path)
         try:
             await self._run(
                 "ffmpeg",
@@ -103,9 +106,14 @@ class FFmpegAudioProcessor:
             )
             await asyncio.to_thread(os.replace, temporary, output_path)
         finally:
-            if list_path.exists():
-                await asyncio.to_thread(list_path.unlink)
+            await asyncio.to_thread(temporary.unlink, missing_ok=True)
+            await asyncio.to_thread(list_path.unlink, missing_ok=True)
         return output_path
+
+    @staticmethod
+    def _ffmpeg_temporary_output(output_path: Path) -> Path:
+        """Return an atomic temporary path whose suffix selects the intended FFmpeg muxer."""
+        return output_path.with_name(f"{output_path.stem}.partial{output_path.suffix}")
 
     async def _run(self, executable: str, *arguments: str) -> str:
         """Run a bounded subprocess and surface stderr as a domain error."""

@@ -366,6 +366,34 @@ def test_narration_is_sorted_uses_fallback_duration_and_includes_pauses() -> Non
     assert narration[0].status.value == "missing"
 
 
+def test_measured_narration_duration_retimes_only_the_timeline_video_coverage() -> None:
+    built = TimelineBuilderService().build(
+        storyboard=storyboard([scene(1), scene(2)]),
+        voiceover_manifest=voiceover(duration=8),
+        visual_asset_manifest=visual_manifest([]),
+        primary_duration_seconds=8,
+        maximum_primary_duration_seconds=9,
+    )
+
+    video = built.tracks[0].clips
+    assert [(clip.start_time_seconds, clip.end_time_seconds) for clip in video] == [
+        (0, 4),
+        (4, 8),
+    ]
+    assert built.summary.total_duration_seconds == 8
+
+
+def test_measured_narration_duration_never_exceeds_the_active_maximum() -> None:
+    with pytest.raises(TimelineValidationError, match="active production duration limit"):
+        TimelineBuilderService().build(
+            storyboard=storyboard([scene(1), scene(2)]),
+            voiceover_manifest=voiceover(duration=10),
+            visual_asset_manifest=visual_manifest([]),
+            primary_duration_seconds=10,
+            maximum_primary_duration_seconds=9,
+        )
+
+
 def test_background_music_is_optional_and_summary_warnings_are_deterministic() -> None:
     without_music = TimelineBuilderService().build(
         storyboard=storyboard([scene(1)]),
