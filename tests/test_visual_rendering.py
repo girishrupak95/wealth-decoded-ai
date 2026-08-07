@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from shared.constants import (
+    DEFAULT_TYPOGRAPHY_ACCENT,
+    DEFAULT_TYPOGRAPHY_BACKGROUND,
+    DEFAULT_TYPOGRAPHY_PRIMARY,
+)
 from shared.visual import fonts
 from shared.visual.fonts import FontResolutionError, resolve_font_path
 from shared.visual.rendering import TypographyRenderer, TypographyRenderError
@@ -89,3 +94,70 @@ def test_font_resolution_uses_existing_portable_fallback(
 
     assert resolve_font_path() == fallback
     assert TypographyRenderer()._resolve_font() == fallback
+
+
+def test_premium_layout_uses_brand_palette_hierarchy_and_safe_margins() -> None:
+    result = TypographyRenderer().render(
+        "Build a resilient emergency fund",
+        supporting_text="A sustainable transfer can strengthen your financial options.",
+        accent_label="Foundations",
+        width=640,
+        height=360,
+    )
+    image = Image.open(io.BytesIO(result.content))
+
+    assert DEFAULT_TYPOGRAPHY_BACKGROUND == "#0B1020"
+    assert DEFAULT_TYPOGRAPHY_PRIMARY == "#FFFFFF"
+    assert DEFAULT_TYPOGRAPHY_ACCENT == "#FFD54A"
+    assert result.headline_font_size >= int((640 // 16) * 1.3)
+    assert result.safe_margin_pixels >= 27
+    assert result.brand_position[0] < 640 - result.safe_margin_pixels
+    assert result.brand_position[1] < 360 - result.safe_margin_pixels
+    accent_x = (result.accent_bounds[0] + result.accent_bounds[2]) // 2
+    accent_y = (result.accent_bounds[1] + result.accent_bounds[3]) // 2
+    assert image.getpixel((accent_x, accent_y)) == (255, 213, 74)
+
+
+def test_long_headline_wrap_is_balanced_without_single_word_final_line() -> None:
+    result = TypographyRenderer().render(
+        "Choose a personalized starter milestone for unexpected essential household costs",
+        width=640,
+        height=360,
+    )
+
+    assert 1 < len(result.headline_lines) <= 4
+    assert len(result.headline_lines[-1].split()) > 1
+    assert all(line.strip() for line in result.headline_lines)
+
+
+@pytest.mark.parametrize(
+    ("headline", "expected_icon"),
+    [
+        ("Protect your future", "shield"),
+        ("Automate the habit", "gear"),
+        ("Build an emergency reserve", "cross"),
+        ("Save a starter fund", "wallet"),
+        ("Understand debt growth", "chart"),
+    ],
+)
+def test_finance_icon_system_renders_transparent_vector_layers(
+    headline: str, expected_icon: str
+) -> None:
+    result = TypographyRenderer().render(headline, width=640, height=360)
+    image = Image.open(io.BytesIO(result.content))
+
+    assert result.icon_name == expected_icon
+    assert image.mode == "RGB"
+    left, top, right, bottom = result.icon_bounds
+    colors = image.crop((left, top, right, bottom)).getcolors(maxcolors=10_000)
+    assert colors is not None and len(colors) > 1
+
+
+def test_previous_minimal_typography_call_remains_full_size_and_branded() -> None:
+    result = TypographyRenderer().render("Review one expense today")
+    image = Image.open(io.BytesIO(result.content))
+
+    assert image.size == (1920, 1080)
+    assert result.brand_position[0] > 1920 // 2
+    assert result.icon_bounds[0] >= result.safe_margin_pixels
+    assert result.accent_bounds[0] >= result.safe_margin_pixels

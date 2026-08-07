@@ -180,10 +180,22 @@ class FFmpegCommandBuilder:
                 raise FFmpegCommandBuildError(
                     f"Primary video source {clip.clip_id} is unavailable."
                 )
+            framing = (
+                f"scale={job.settings.width}:{job.settings.height}:"
+                "force_original_aspect_ratio=increase,"
+                f"crop={job.settings.width}:{job.settings.height}:"
+                "(iw-ow)/2:(ih-oh)/2"
+                if input_.input_type == FFmpegInputType.IMAGE
+                else (
+                    f"scale={job.settings.width}:{job.settings.height}:"
+                    "force_original_aspect_ratio=decrease,"
+                    f"pad={job.settings.width}:{job.settings.height}:"
+                    f"(ow-iw)/2:(oh-ih)/2:color={job.timeline.settings.background_color}"
+                )
+            )
             expression = (
                 f"trim=duration={_seconds(clip.duration_seconds)},setpts=PTS-STARTPTS,"
-                f"scale={job.settings.width}:{job.settings.height}:force_original_aspect_ratio=decrease,"
-                f"pad={job.settings.width}:{job.settings.height}:(ow-iw)/2:(oh-ih)/2:color={job.timeline.settings.background_color},"
+                f"{framing},"
                 f"setsar=1,fps={job.settings.frame_rate},format={job.settings.pixel_format}"
             )
             label = f"v{index}"

@@ -113,12 +113,21 @@ def test_capabilities_and_image_plan_are_deterministic(tmp_path: Path) -> None:
     assert plan.inputs[0].input_type.value == "image" and plan.inputs[0].loop
     assert [input_.input_index for input_ in plan.inputs] == [0, 1]
     assert "-loop" in plan.command_arguments and plan.command_arguments[-1].endswith("output.mp4")
-    assert any("scale=1920:1080" in node.filter_expression for node in plan.filter_nodes)
+    image_node = next(node for node in plan.filter_nodes if node.node_id == "vnorm0")
+    assert "scale=1920:1080:force_original_aspect_ratio=increase" in image_node.filter_expression
+    assert "crop=1920:1080:(iw-ow)/2:(ih-oh)/2" in image_node.filter_expression
+    assert "pad=" not in image_node.filter_expression
+    assert "setsar=1,fps=30,format=yuv420p" in image_node.filter_expression
+    assert plan.inputs[0].duration_seconds == 5
 
 
 def test_video_plan_and_invalid_jobs_are_rejected(tmp_path: Path) -> None:
     plan = FFmpegCommandBuilder().build(job(tmp_path, image=False))
     assert plan.inputs[0].input_type.value == "video"
+    video_node = next(node for node in plan.filter_nodes if node.node_id == "vnorm0")
+    assert "force_original_aspect_ratio=decrease" in video_node.filter_expression
+    assert "pad=1920:1080" in video_node.filter_expression
+    assert "crop=" not in video_node.filter_expression
     with pytest.raises(FFmpegCommandBuildError, match="FFmpeg render job"):
         FFmpegCommandBuilder().build(job(tmp_path, renderer_type=RendererType.EXTERNAL))
     rejected = job(tmp_path)
@@ -413,6 +422,30 @@ def test_final_audio_reapplies_configured_sample_rate_after_mix_and_loudnorm(
     )
     assert "aresample=96000" not in final.filter_expression
     assert [mapping.stream_label for mapping in plan.stream_maps] == ["vfinal", "afinal"]
+
+
+@pytest.mark.parametrize(
+    ("source_dimensions", "description"),
+    [
+        ((1536, 1024), "production 3:2 image"),
+        ((1920, 1080), "exact full-frame typography canvas"),
+        ((1024, 1536), "portrait image"),
+    ],
+)
+def test_static_images_use_full_frame_cover_without_pillarbox_padding(
+    tmp_path: Path, source_dimensions: tuple[int, int], description: str
+) -> None:
+    del source_dimensions, description
+    render_job = job(tmp_path)
+
+    plan = FFmpegCommandBuilder().build(render_job)
+    video_node = next(node for node in plan.filter_nodes if node.node_id == "vnorm0")
+
+    assert "scale=1920:1080:force_original_aspect_ratio=increase" in video_node.filter_expression
+    assert "crop=1920:1080:(iw-ow)/2:(ih-oh)/2" in video_node.filter_expression
+    assert "pad=" not in video_node.filter_expression
+    assert plan.expected_duration_seconds == 5
+    assert plan.command_arguments[-1].endswith("output.mp4")
 
 
 @pytest.mark.parametrize(
