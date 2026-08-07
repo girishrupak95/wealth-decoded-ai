@@ -59,6 +59,9 @@ class ScriptReview(BaseModel):
     revision_summary: str
     required_changes: list[str]
     optional_improvements: list[str]
+    blocking_findings: list[str] = Field(default_factory=list)
+    editorial_suggestions: list[str] = Field(default_factory=list)
+    deterministic_gate_applied: bool = False
     reviewed_at: datetime
     reviewer_version: str
 
@@ -67,9 +70,15 @@ class ScriptReview(BaseModel):
         ids = [finding.finding_id for finding in self.findings]
         if len(ids) != len(set(ids)):
             raise ValueError("Finding IDs must be unique.")
-        if self.approved and any(finding.severity == "critical" for finding in self.findings):
+        if self.approved and self.blocking_findings:
+            raise ValueError("Reviews with blocking findings cannot be approved.")
+        if (
+            self.approved
+            and any(finding.severity == "critical" for finding in self.findings)
+            and not self.deterministic_gate_applied
+        ):
             raise ValueError("Reviews with critical findings cannot be approved.")
-        if self.approved and self.scores.overall_score < 8:
+        if self.approved and self.scores.overall_score < 8 and not self.deterministic_gate_applied:
             raise ValueError("Approved reviews require an overall score of at least 8.0.")
         if not self.approved and not self.required_changes:
             raise ValueError("Rejected reviews require revision instructions.")

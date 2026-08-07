@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from shared.visual import fonts
+from shared.visual.fonts import FontResolutionError, resolve_font_path
 from shared.visual.rendering import TypographyRenderer, TypographyRenderError
 
 
@@ -67,3 +69,23 @@ async def test_atomic_save_returns_checksum(tmp_path: Path) -> None:
     )
     checksum = await renderer.save(result, tmp_path / "card.png")
     assert len(checksum) == 64 and (tmp_path / "card.png").is_file()
+
+
+def test_font_resolution_prefers_explicit_path_and_rejects_invalid(tmp_path: Path) -> None:
+    explicit = tmp_path / "configured.ttf"
+    explicit.write_bytes(b"font")
+
+    assert resolve_font_path(explicit) == explicit
+    with pytest.raises(FontResolutionError, match="Configured font path"):
+        resolve_font_path(tmp_path / "missing.ttf")
+
+
+def test_font_resolution_uses_existing_portable_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fallback = tmp_path / "fallback.ttf"
+    fallback.write_bytes(b"font")
+    monkeypatch.setattr(fonts, "FONT_FALLBACK_CANDIDATES", (fallback,))
+
+    assert resolve_font_path() == fallback
+    assert TypographyRenderer()._resolve_font() == fallback

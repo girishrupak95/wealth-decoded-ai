@@ -4,6 +4,8 @@ $video_concept
 Research package:
 $research_package
 
+$active_editorial_constraints
+
 Video script:
 $video_script
 
@@ -12,6 +14,8 @@ $knowledge
 
 Active script-length policy:
 $script_length_policy
+
+$authoritative_production_totals
 
 $review_format_guidance
 

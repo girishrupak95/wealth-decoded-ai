@@ -20,6 +20,8 @@ Valid script section IDs:
 
 $valid_script_section_ids
 
+$active_renderable_asset_types
+
 Wealth Decoded knowledge base:
 
 $knowledge

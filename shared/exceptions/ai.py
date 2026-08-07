@@ -4,6 +4,10 @@
 class OutputValidationError(Exception):
     """Raised when a response fails output validation."""
 
+    def __init__(self, message: str, *, error_count: int | None = None) -> None:
+        super().__init__(message)
+        self.error_count = error_count
+
 
 class OpenAIRequestError(Exception):
     """Raised when an OpenAI request cannot be completed safely."""

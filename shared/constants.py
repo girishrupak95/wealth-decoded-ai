@@ -12,6 +12,8 @@ class ExecutionStatus(StrEnum):
 MILLISECONDS_PER_SECOND = 1_000
 DEFAULT_TOPIC_CATEGORY = "Personal Finance"
 GENERATED_DIRECTORY_NAME = "generated"
+DEBUG_DIRECTORY_NAME = "debug"
+RAW_LLM_DEBUG_FILENAME_SUFFIX = "-raw.json"
 JSON_FILE_SUFFIX = ".json"
 MARKDOWN_FILE_SUFFIX = ".md"
 TOPIC_AGENT_NAME = "topic-agent"

@@ -39,6 +39,7 @@ from shared.rendering.validation import (
 
 def timeline(tmp_path: Path, *, status: TimelineClipStatus = TimelineClipStatus.READY) -> Timeline:
     """Create a compact source-complete timeline, unless a state is explicitly under test."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     video = tmp_path / "video.mp4"
     narration = tmp_path / "narration.mp3"
     video.write_bytes(b"video")
@@ -147,6 +148,105 @@ def test_readiness_handles_missing_placeholders_and_remote_sources(tmp_path: Pat
     )
     assert readiness == RenderReadiness.READY_WITH_WARNINGS
     assert any(not warning.blocking for warning in warnings)
+
+
+def add_sound_effect(
+    source: Timeline,
+    *,
+    status: TimelineClipStatus = TimelineClipStatus.REQUIRES_REVIEW,
+    source_type: TimelineAssetSource = TimelineAssetSource.GENERATED_INSTRUCTION,
+    source_path: Path | None = None,
+    required: bool = False,
+) -> Timeline:
+    sound_effect = TimelineClip(
+        clip_id="sound-effect-001",
+        track_type=TimelineTrackType.SOUND_EFFECT,
+        track_number=1,
+        sequence_number=1,
+        start_time_seconds=1,
+        end_time_seconds=2,
+        source_type=source_type,
+        source_path=source_path,
+        status=status,
+        metadata={"required": required},
+    )
+    source.tracks.append(
+        TimelineTrack(
+            track_id="sound-effects",
+            track_type=TimelineTrackType.SOUND_EFFECT,
+            track_number=1,
+            name="Sound Effects",
+            clips=[sound_effect],
+        )
+    )
+    return Timeline.model_validate(source.model_dump())
+
+
+def test_optional_sound_effect_policy_is_explicit_and_default_strict(tmp_path: Path) -> None:
+    source = add_sound_effect(timeline(tmp_path))
+    strict = build_render_job(
+        job_id="strict",
+        timeline=source,
+        settings=settings(),
+        renderer_type=RendererType.FFMPEG,
+        capabilities=capabilities(supports_placeholders=False),
+        output_directory=tmp_path / "strict",
+        created_at=datetime(2026, 8, 4, tzinfo=UTC),
+    )
+    fixture = build_render_job(
+        job_id="fixture",
+        timeline=source,
+        settings=settings(),
+        renderer_type=RendererType.FFMPEG,
+        capabilities=capabilities(supports_placeholders=False),
+        output_directory=tmp_path / "fixture",
+        created_at=datetime(2026, 8, 4, tzinfo=UTC),
+        require_sound_effects_for_render=False,
+    )
+
+    sfx = fixture.timeline.tracks[-1].clips[0]
+    assert strict.readiness == RenderReadiness.NOT_READY
+    assert fixture.readiness == RenderReadiness.READY_WITH_WARNINGS
+    assert sfx.status == TimelineClipStatus.REQUIRES_REVIEW
+    assert sfx.source_path is None
+    assert fixture.timeline.summary.review_clip_count == 1
+    assert any(warning.category == "optional_sound_effect_omitted" for warning in fixture.warnings)
+
+
+def test_optional_policy_keeps_required_and_dishonest_sound_effects_blocking(
+    tmp_path: Path,
+) -> None:
+    required = add_sound_effect(timeline(tmp_path / "required"), required=True)
+    required_job = build_render_job(
+        job_id="required",
+        timeline=required,
+        settings=settings(),
+        renderer_type=RendererType.FFMPEG,
+        capabilities=capabilities(supports_placeholders=False),
+        output_directory=tmp_path / "required-output",
+        created_at=datetime(2026, 8, 4, tzinfo=UTC),
+        require_sound_effects_for_render=False,
+    )
+    assert required_job.readiness == RenderReadiness.NOT_READY
+
+    missing_file = tmp_path / "missing.mp3"
+    dishonest = add_sound_effect(
+        timeline(tmp_path / "dishonest"),
+        status=TimelineClipStatus.READY,
+        source_type=TimelineAssetSource.LOCAL_FILE,
+        source_path=missing_file,
+    )
+    dishonest_job = build_render_job(
+        job_id="dishonest",
+        timeline=dishonest,
+        settings=settings(),
+        renderer_type=RendererType.FFMPEG,
+        capabilities=capabilities(supports_placeholders=False),
+        output_directory=tmp_path / "dishonest-output",
+        created_at=datetime(2026, 8, 4, tzinfo=UTC),
+        require_sound_effects_for_render=False,
+    )
+    assert dishonest_job.readiness == RenderReadiness.NOT_READY
 
 
 def test_settings_and_job_warnings_are_deterministic_without_timeline_mutation(

@@ -27,6 +27,17 @@ class ReviewerAgent(BaseAgent):
         research: ResearchPackage,
         script: VideoScript,
         policy: ScriptLengthPolicy | None = None,
+        editorial_constraints: list[str] | None = None,
+        authoritative_totals: dict[str, int] | None = None,
     ) -> ScriptReview:
-        execution = await self.execute(build_reviewer_request(concept, research, script, policy))
+        execution = await self.execute(
+            build_reviewer_request(
+                concept,
+                research,
+                script,
+                policy,
+                editorial_constraints,
+                authoritative_totals,
+            )
+        )
         return ScriptReview.model_validate(execution.output)

@@ -73,6 +73,39 @@ def script(section_words: int = 28) -> VideoScript:
     )
 
 
+def observed_short_fixture_script() -> VideoScript:
+    """Reproduce an 80-word audio contract with a persisted ten-word disclaimer."""
+
+    def words(count: int) -> str:
+        return "word " * count
+
+    sections = [
+        ScriptSection(
+            section_id=f"section-{index}",
+            heading=f"Section {index}",
+            narration=words(word_count),
+            estimated_duration_seconds=10,
+            visual_direction="Visual",
+            on_screen_text=[],
+            source_references=["Source"],
+            verification_required=False,
+        )
+        for index, word_count in enumerate((12, 12, 12, 13), start=1)
+    ]
+    return VideoScript(
+        title="Emergency Fund",
+        hook=words(8),
+        intro=words(4),
+        sections=sections,
+        conclusion=words(8),
+        cta=words(11),
+        disclaimer=words(10),
+        total_estimated_duration_seconds=1,
+        estimated_word_count=1,
+        verification_notes=[],
+    )
+
+
 class PolicyGenerator:
     def __init__(self, responses: list[VideoScript]) -> None:
         self.responses = responses
@@ -124,15 +157,39 @@ def test_default_and_short_policies_are_explicit_and_validated() -> None:
     assert (long_form.min_words, long_form.max_words) == (600, 900)
     assert (long_form.min_duration_seconds, long_form.max_duration_seconds) == (240, 390)
     short = short_production_fixture_policy()
-    assert short.profile_name == "production_fixture_short" and short.target_words == 90
+    assert short.profile_name == "production_fixture_short"
+    assert (short.min_words, short.max_words, short.target_words) == (75, 82, 79)
+    assert (short.min_duration_seconds, short.max_duration_seconds) == (30, 45)
+    assert short.target_duration_seconds == 41
+    assert long_form.include_disclaimer_in_spoken_count
+    assert not short.include_disclaimer_in_spoken_count
     with pytest.raises(ValueError):
         ScriptLengthPolicy(min_words=111, max_words=110)
 
 
 @pytest.mark.asyncio
+async def test_short_policy_normalizes_only_audio_spoken_content(tmp_path: Path) -> None:
+    observed = observed_short_fixture_script()
+    policy = short_production_fixture_policy()
+
+    assert observed.calculate_word_count(include_disclaimer=True) == 90
+    assert observed.calculate_word_count(include_disclaimer=False) == 80
+    assert observed.calculate_duration_seconds(words_per_minute=145, include_disclaimer=True) == 37
+    assert observed.calculate_duration_seconds(words_per_minute=145, include_disclaimer=False) == 33
+    assert observed.disclaimer.strip()
+
+    generated = await ScriptGenerationService(
+        PolicyGenerator([observed]), tmp_path, policy=policy
+    ).generate(concept(), research())
+
+    assert generated.script.estimated_word_count == 80
+    assert generated.script.total_estimated_duration_seconds == 33
+
+
+@pytest.mark.asyncio
 async def test_short_policy_flows_to_generation_feedback_and_review(tmp_path: Path) -> None:
     policy = short_production_fixture_policy()
-    generator = PolicyGenerator([script(10), script(28)])
+    generator = PolicyGenerator([script(10), script(22)])
     generated = await ScriptGenerationService(
         generator, tmp_path, policy=policy, max_retries=1
     ).generate(concept(), research())

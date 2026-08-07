@@ -63,18 +63,22 @@ def _active_script_constraints(policy: ScriptLengthPolicy) -> str:
         policy.target_duration_seconds
         or (policy.min_duration_seconds + policy.max_duration_seconds) // 2
     )
+    spoken_fields = "hook + intro + every sections[].narration + conclusion + CTA"
+    if policy.include_disclaimer_in_spoken_count:
+        spoken_fields += " + disclaimer"
     return (
         f"ACTIVE SCRIPT LENGTH POLICY ({policy.profile_name}): total spoken word count must be "
         f"{policy.min_words}-{policy.max_words} words; target approximately {target_words} words. "
         f"Total duration must be {policy.min_duration_seconds}-{policy.max_duration_seconds} "
         f"seconds; target approximately {target_duration} seconds. Narration across hook, intro, "
-        "TOTAL SPOKEN WORDS = hook + intro + every sections[].narration + conclusion + CTA + "
-        "disclaimer. The title, headings, visual_direction, on_screen_text, source_references, "
+        f"TOTAL SPOKEN WORDS = {spoken_fields}. The title, headings, visual_direction, "
+        "on_screen_text, source_references, "
         "and verification_notes do not count. Do not put the total budget only in section "
         "narration; "
         "reserve words for every spoken field. For production_fixture_short, use this guidance: "
-        "hook 8-12 words; intro 0-8 words; section narration combined 45-60 words; conclusion "
-        "8-12 words; CTA 5-8 words; disclaimer 8-12 words. Intro may be empty. Keep the hook "
+        "hook 8-10 words; intro 0-4 words; section narration combined 45-52 words; conclusion "
+        "6-8 words; CTA 10-14 words. The disclaimer is excluded for this profile. Intro may be "
+        "empty. Keep the hook "
         "and first section distinct, the conclusion brief, and the CTA to one concise action. "
         "Deterministic duration is derived from the complete spoken-word total and configured "
         "speaking rate; per-section durations reflect only that section narration, while top-level "

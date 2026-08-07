@@ -1,7 +1,9 @@
 """Reusable async execution lifecycle for agents."""
 
 import json
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 from string import Template
 from time import perf_counter
 from typing import Any
@@ -14,6 +16,11 @@ from shared.ai.knowledge_loader import KnowledgeLoader
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
+from shared.constants import (
+    DEBUG_DIRECTORY_NAME,
+    GENERATED_DIRECTORY_NAME,
+    RAW_LLM_DEBUG_FILENAME_SUFFIX,
+)
 from shared.exceptions.ai import OutputValidationError
 
 
@@ -87,6 +94,7 @@ class BaseAgent(ABC):
                     knowledge=knowledge,
                 )
             )
+            self._save_debug_raw_output(raw_output, event_logger)
             output = self._output_validator.validate(raw_output, self.output_schema)
         except OutputValidationError as error:
             event_logger.warning(
@@ -118,3 +126,30 @@ class BaseAgent(ABC):
             "Arrays must use the expected item structure.\n\nJSON Schema:\n"
             f"{schema}"
         )
+
+    def _save_debug_raw_output(self, raw_output: str, event_logger: Any) -> None:
+        if os.environ.get("WEALTH_DEBUG_SAVE_RAW_LLM") != "1":
+            return
+        try:
+            path = self._debug_output_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self._format_debug_raw_output(raw_output), encoding="utf-8")
+            event_logger.info("debug_output_saved", debug_output_saved=True)
+        except Exception:
+            event_logger.warning("debug_output_save_failed", debug_output_saved=False)
+
+    def _debug_output_path(self) -> Path:
+        agent_name = self.name.replace("-", "_")
+        return (
+            Path.cwd()
+            / GENERATED_DIRECTORY_NAME
+            / DEBUG_DIRECTORY_NAME
+            / f"{agent_name}{RAW_LLM_DEBUG_FILENAME_SUFFIX}"
+        )
+
+    @staticmethod
+    def _format_debug_raw_output(raw_output: str) -> str:
+        try:
+            return json.dumps(json.loads(raw_output), indent=2, sort_keys=True)
+        except json.JSONDecodeError:
+            return raw_output

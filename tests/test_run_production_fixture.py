@@ -1,6 +1,7 @@
 """Production fixture CLI tests without paid providers or renderer execution."""
 
 import importlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,9 +12,20 @@ import pytest
 from pydantic import BaseModel
 from pytest import CaptureFixture, MonkeyPatch
 
+from shared.models.rendering import RenderJobStatus, RenderResult
 from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.storyboard import Storyboard, StoryboardSummary
-from shared.models.timeline import Timeline, TimelineSummary
+from shared.models.timeline import RenderReadiness as TimelineRenderReadiness
+from shared.models.timeline import (
+    Timeline,
+    TimelineAssetSource,
+    TimelineClip,
+    TimelineClipStatus,
+    TimelineOverlay,
+    TimelineSummary,
+    TimelineTrack,
+    TimelineTrackType,
+)
 from shared.models.topic import TopicCandidate
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
@@ -353,7 +365,7 @@ def pipeline_dependencies(
         visual_persistence=SimpleNamespace(persist=AsyncMock()),
         timeline_builder=MagicMock(),
         timeline_persistence=SimpleNamespace(persist=AsyncMock()),
-        visual_settings=SimpleNamespace(live_generation=False),
+        visual_settings=SimpleNamespace(live_generation=False, max_live_images=4),
         voice_provider=Closeable(),
         client=Closeable(),
     )
@@ -374,7 +386,7 @@ def pipeline_dependencies(
         ("script", "script"),
         ("review", "review"),
         ("storyboard", "storyboard"),
-        ("voiceover", "voiceover"),
+        ("voiceover", "visual"),
         ("visuals", "visual"),
         ("timeline", "timeline"),
         ("render", "render"),
@@ -432,6 +444,12 @@ async def test_resume_executes_only_the_selected_stage_and_later_work(
         mocks["review"].review.assert_awaited_once()
     elif expected_service == "storyboard":
         mocks["storyboard"].generate.assert_awaited_once()
+        storyboard_kwargs = mocks["storyboard"].generate.await_args.kwargs
+        assert storyboard_kwargs["allowed_visual_asset_types"] == {
+            cli.VisualAssetType.AI_IMAGE,
+            cli.VisualAssetType.TYPOGRAPHY,
+        }
+        assert storyboard_kwargs["max_ai_images"] == 4
     elif expected_service == "voiceover":
         mocks["voiceover"].generate.assert_awaited_once()
     elif expected_service == "visual":
@@ -441,11 +459,221 @@ async def test_resume_executes_only_the_selected_stage_and_later_work(
     else:
         assert render_capabilities is not None
         render_capabilities.assert_awaited_once()
+    if resume_from == "voiceover":
+        mocks["voiceover"].generate.assert_not_awaited()
 
     output = capsys.readouterr().out
     assert "[1/17] Topic generation: reused" in output
     if resume_from in {"review", "storyboard", "voiceover", "visuals", "timeline", "render"}:
         assert "[4/17] Script generation: reused" in output
+
+
+@pytest.mark.asyncio
+async def test_timeline_stage_numbering_and_fixture_resume_skip_visual_generation(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title="Persisted script")])
+    built = resume_artifacts("render")["timeline/timeline.json"]
+    dependencies.pipeline.timeline_builder.build.return_value = built
+    dependencies.pipeline.timeline_persistence.persist = AsyncMock(
+        return_value=SimpleNamespace(
+            timeline=built,
+            timeline_json_path=tmp_path / "persisted-timeline.json",
+            render_readiness=TimelineRenderReadiness.READY_WITH_WARNINGS,
+        )
+    )
+    (tmp_path / "persisted-timeline.json").write_text(
+        json.dumps(built.model_dump(mode="json")), encoding="utf-8"
+    )
+    renderer = SimpleNamespace(
+        capabilities=AsyncMock(side_effect=RuntimeError("render reached")), close=AsyncMock()
+    )
+    dependencies = cli.ProductionDependencies(
+        dependencies.pipeline, renderer, MagicMock(), MagicMock()
+    )
+
+    with pytest.raises(RuntimeError, match="render reached"):
+        await cli.run_pipeline(
+            dependencies,
+            tmp_path,
+            skip_images=True,
+            resume_from="timeline",
+            resume_artifacts=resume_artifacts("timeline"),
+        )
+
+    output = capsys.readouterr().out
+    assert "[11/17] Timeline builder: completed" in output
+    assert "[12/17] Timeline persistence: completed" in output
+    mocks["visual"].generate.assert_not_awaited()
+
+
+def test_fixture_warning_preserves_optional_sound_effect_instruction() -> None:
+    sound_effect = TimelineClip(
+        clip_id="sound-effect-001",
+        track_type=TimelineTrackType.SOUND_EFFECT,
+        track_number=1,
+        sequence_number=1,
+        start_time_seconds=1,
+        end_time_seconds=2,
+        source_type=TimelineAssetSource.GENERATED_INSTRUCTION,
+        source_path=None,
+        status=TimelineClipStatus.REQUIRES_REVIEW,
+    )
+    source = resume_artifacts("render")["timeline/timeline.json"]
+    assert isinstance(source, Timeline)
+    source.tracks = [
+        TimelineTrack(
+            track_id="sound-effects",
+            track_type=TimelineTrackType.SOUND_EFFECT,
+            track_number=1,
+            name="Sound Effects",
+            clips=[sound_effect],
+        )
+    ]
+    source.summary.review_clip_count = 1
+
+    warned = cli._with_optional_sound_effect_warning(source)
+
+    assert warned.warnings == [
+        "1 optional sound-effect instructions were omitted from this render."
+    ]
+    assert warned.summary.review_clip_count == 1
+    assert warned.tracks[0].clips[0].status == TimelineClipStatus.REQUIRES_REVIEW
+    assert warned.tracks[0].clips[0].source_path is None
+
+
+@pytest.mark.asyncio
+async def test_render_resume_enables_motion_fallback_without_provider_regeneration(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title="Persisted script")])
+    renderer = SimpleNamespace(
+        capabilities=AsyncMock(return_value=SimpleNamespace(renderer_type="ffmpeg")),
+        close=AsyncMock(),
+    )
+    dependencies = cli.ProductionDependencies(
+        dependencies.pipeline, renderer, MagicMock(), MagicMock()
+    )
+    build_job = MagicMock(side_effect=RuntimeError("render job reached"))
+    monkeypatch.setattr(cli, "build_render_job", build_job)
+    monkeypatch.setattr(cli, "resolve_font_path", unexpected_dependency_construction)
+
+    with pytest.raises(RuntimeError, match="render job reached"):
+        await cli.run_pipeline(
+            dependencies,
+            tmp_path,
+            skip_images=True,
+            resume_from="render",
+            resume_artifacts=resume_artifacts("render"),
+        )
+
+    assert build_job.call_args.kwargs["allow_static_fallback_for_unsupported_motion"] is True
+    dependencies.pipeline.topic_service.discover.assert_not_awaited()
+    dependencies.pipeline.concept_service.generate.assert_not_awaited()
+    dependencies.pipeline.research_service.generate.assert_not_awaited()
+    mocks["script"].generate.assert_not_awaited()
+    mocks["review"].review.assert_not_awaited()
+    mocks["storyboard"].generate.assert_not_awaited()
+    mocks["voiceover"].generate.assert_not_awaited()
+    mocks["visual"].generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_render_resume_resolves_overlay_font_without_provider_calls(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    artifacts = resume_artifacts("render")
+    timeline = artifacts["timeline/timeline.json"]
+    assert isinstance(timeline, Timeline)
+    timeline.overlays = [
+        TimelineOverlay(
+            overlay_id="overlay-1",
+            text="Starter milestone",
+            start_time_seconds=1,
+            end_time_seconds=2,
+            position="lower_third",
+            style_name="fixture",
+        )
+    ]
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title="Persisted script")])
+    renderer = SimpleNamespace(
+        capabilities=AsyncMock(return_value=SimpleNamespace(renderer_type="ffmpeg")),
+        close=AsyncMock(),
+    )
+    dependencies = cli.ProductionDependencies(
+        dependencies.pipeline, renderer, MagicMock(), MagicMock()
+    )
+    font = tmp_path / "fixture-font.ttf"
+    font.write_bytes(b"font")
+    resolver = MagicMock(return_value=font)
+    build_job = MagicMock(side_effect=RuntimeError("render job reached"))
+    monkeypatch.setattr(cli, "resolve_font_path", resolver)
+    monkeypatch.setattr(cli, "build_render_job", build_job)
+
+    with pytest.raises(RuntimeError, match="render job reached"):
+        await cli.run_pipeline(
+            dependencies,
+            tmp_path,
+            skip_images=True,
+            resume_from="render",
+            resume_artifacts=artifacts,
+        )
+
+    resolver.assert_called_once()
+    assert build_job.call_args.kwargs["overlay_font_path"] == font
+    mocks["voiceover"].generate.assert_not_awaited()
+    mocks["visual"].generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_render_resume_overwrites_stale_terminal_result_without_provider_calls(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    dependencies, mocks = pipeline_dependencies([review(approved=True, title="Persisted script")])
+    failed = RenderResult(
+        job_id="rerender",
+        status=RenderJobStatus.FAILED,
+        error_message="FFmpeg render failed.",
+        started_at=datetime(2026, 8, 7, tzinfo=UTC),
+        completed_at=datetime(2026, 8, 7, tzinfo=UTC),
+        elapsed_seconds=1,
+        renderer_name="ffmpeg",
+    )
+    renderer = SimpleNamespace(
+        capabilities=AsyncMock(return_value=SimpleNamespace(renderer_type="ffmpeg")),
+        render=AsyncMock(return_value=failed),
+        close=AsyncMock(),
+    )
+    persistence = SimpleNamespace(
+        persist=AsyncMock(
+            return_value=(
+                tmp_path / "render" / "render-result.json",
+                tmp_path / "render" / "render-result.md",
+            )
+        )
+    )
+    dependencies = cli.ProductionDependencies(
+        dependencies.pipeline, renderer, MagicMock(), persistence
+    )
+    job = SimpleNamespace(
+        title="Emergency fund",
+        output_directory=tmp_path / "render",
+    )
+    monkeypatch.setattr(cli, "build_render_job", MagicMock(return_value=job))
+    dependencies.builder.build.return_value = SimpleNamespace(inputs=[])
+
+    with pytest.raises(cli.ProductionFixtureError, match="FFmpeg render failed"):
+        await cli.run_pipeline(
+            dependencies,
+            tmp_path,
+            skip_images=True,
+            resume_from="render",
+            resume_artifacts=resume_artifacts("render"),
+        )
+
+    assert persistence.persist.await_args.kwargs["overwrite"] is True
+    mocks["voiceover"].generate.assert_not_awaited()
+    mocks["visual"].generate.assert_not_awaited()
 
 
 def voiceover_manifest(duration: float) -> VoiceoverManifest:
@@ -488,6 +716,140 @@ def voiceover_manifest(duration: float) -> VoiceoverManifest:
         disclaimer_included_in_audio=False,
         disclaimer_text="Educational disclaimer.",
     )
+
+
+def write_voiceover_package(
+    directory: Path, manifest: VoiceoverManifest, *, marker: bytes = b"audio"
+) -> None:
+    """Persist the complete canonical package expected by resume validation."""
+    segments = directory / "segments"
+    segments.mkdir(parents=True)
+    (directory / "voiceover-manifest.json").write_text(
+        json.dumps(manifest.model_dump(mode="json")), encoding="utf-8"
+    )
+    (directory / manifest.combined_audio_filename).write_bytes(marker)
+    for segment in manifest.segments:
+        (segments / segment.audio_filename).write_bytes(marker)
+
+
+def test_voiceover_package_replacement_is_fresh_atomic_and_cleans_temporary_files(
+    tmp_path: Path,
+) -> None:
+    manifest = voiceover_manifest(40)
+    source = tmp_path / "generated"
+    destination = tmp_path / "run" / "voiceover"
+    write_voiceover_package(source, manifest, marker=b"new")
+    write_voiceover_package(destination, manifest, marker=b"old")
+    (destination / "segments" / "stale.mp3").write_bytes(b"stale")
+
+    cli._replace_voiceover_directory_atomic(source, destination)
+
+    assert (destination / manifest.combined_audio_filename).read_bytes() == b"new"
+    assert not (destination / "segments" / "stale.mp3").exists()
+    assert not list(destination.parent.glob(".voiceover-replacement-*"))
+
+
+def test_fresh_voiceover_package_is_created(tmp_path: Path) -> None:
+    manifest = voiceover_manifest(40)
+    source = tmp_path / "generated"
+    destination = tmp_path / "run" / "voiceover"
+    write_voiceover_package(source, manifest)
+
+    cli._replace_voiceover_directory_atomic(source, destination)
+
+    assert cli._validate_voiceover_package(destination) == manifest
+
+
+def test_failed_voiceover_replacement_preserves_previous_package(tmp_path: Path) -> None:
+    manifest = voiceover_manifest(40)
+    source = tmp_path / "invalid-generated"
+    destination = tmp_path / "run" / "voiceover"
+    source.mkdir()
+    write_voiceover_package(destination, manifest, marker=b"old")
+
+    with pytest.raises(
+        cli.ProductionFixtureError,
+        match="Existing voiceover package could not be replaced safely",
+    ):
+        cli._replace_voiceover_directory_atomic(source, destination)
+
+    assert (destination / manifest.combined_audio_filename).read_bytes() == b"old"
+    assert cli._validate_voiceover_package(destination) == manifest
+    assert not list(destination.parent.glob(".voiceover-replacement-*"))
+
+
+def test_failed_voiceover_swap_rolls_back_previous_package(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    manifest = voiceover_manifest(40)
+    source = tmp_path / "generated"
+    destination = tmp_path / "run" / "voiceover"
+    write_voiceover_package(source, manifest, marker=b"new")
+    write_voiceover_package(destination, manifest, marker=b"old")
+    original_replace = cli.os.replace
+    replace_calls = 0
+
+    def fail_new_package_swap(source_path: Path, destination_path: Path) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("simulated swap failure")
+        original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(cli.os, "replace", fail_new_package_swap)
+
+    with pytest.raises(
+        cli.ProductionFixtureError,
+        match="Existing voiceover package could not be replaced safely",
+    ):
+        cli._replace_voiceover_directory_atomic(source, destination)
+
+    assert (destination / manifest.combined_audio_filename).read_bytes() == b"old"
+    assert cli._validate_voiceover_package(destination) == manifest
+    assert not list(destination.parent.glob(".voiceover-replacement-*"))
+
+
+def test_resume_from_voiceover_validates_canonical_package(tmp_path: Path) -> None:
+    artifacts = resume_artifacts("voiceover")
+    for filename, model in artifacts.items():
+        if filename == "voiceover.json" or filename in {
+            "topic.json",
+            "concept.json",
+            "research.json",
+            "script.json",
+            "review.json",
+            "storyboard.json",
+        }:
+            (tmp_path / filename).write_text(
+                json.dumps(model.model_dump(mode="json")), encoding="utf-8"
+            )
+    manifest = artifacts["voiceover.json"]
+    assert isinstance(manifest, VoiceoverManifest)
+    write_voiceover_package(tmp_path / "voiceover", manifest)
+
+    loaded = cli.load_resume_artifacts(tmp_path, "voiceover")
+
+    assert loaded["voiceover.json"] == manifest
+
+
+def test_invalid_resume_voiceover_package_fails_validation(tmp_path: Path) -> None:
+    artifacts = resume_artifacts("voiceover")
+    for filename in (
+        "topic.json",
+        "concept.json",
+        "research.json",
+        "script.json",
+        "review.json",
+        "storyboard.json",
+        "voiceover.json",
+    ):
+        (tmp_path / filename).write_text(
+            json.dumps(artifacts[filename].model_dump(mode="json")), encoding="utf-8"
+        )
+    (tmp_path / "voiceover").mkdir()
+
+    with pytest.raises(cli.ProductionFixtureError, match="voiceover package is invalid"):
+        cli.load_resume_artifacts(tmp_path, "voiceover")
 
 
 @pytest.mark.asyncio
@@ -557,8 +919,16 @@ async def test_one_rejected_review_generates_one_revision_and_promotes_it(
 async def test_approved_revised_script_continues_to_downstream_work(tmp_path: Path) -> None:
     initial = script("Initial script")
     revised = script("Revised script")
+    approved_with_suggestions = review(approved=True, title=revised.title).model_copy(
+        update={
+            "editorial_suggestions": [
+                "Strengthen the hook.",
+                "Smooth the transition into the CTA.",
+            ]
+        }
+    )
     dependencies, mocks = pipeline_dependencies(
-        [review(approved=False, title=initial.title), review(approved=True, title=revised.title)]
+        [review(approved=False, title=initial.title), approved_with_suggestions]
     )
 
     with pytest.raises(RuntimeError, match="stop after approval"):
@@ -568,6 +938,9 @@ async def test_approved_revised_script_continues_to_downstream_work(tmp_path: Pa
     mocks["script"].generate_revision.assert_awaited_once()
     assert mocks["review"].review.await_count == 2
     mocks["storyboard"].generate.assert_awaited_once()
+    persisted = ScriptReview.model_validate_json((tmp_path / "review.json").read_text())
+    assert persisted.approved
+    assert persisted.editorial_suggestions == approved_with_suggestions.editorial_suggestions
 
 
 @pytest.mark.asyncio
@@ -598,8 +971,11 @@ async def test_overlong_measured_voiceover_stops_before_visual_generation(
     dependencies.pipeline.storyboard_service.generate = AsyncMock(
         return_value=SimpleNamespace(storyboard=ArtifactStub())
     )
+    manifest = voiceover_manifest(46)
+    generated_package = tmp_path / "generated-voiceover"
+    write_voiceover_package(generated_package, manifest)
     dependencies.pipeline.voiceover_service.generate = AsyncMock(
-        return_value=SimpleNamespace(manifest=voiceover_manifest(46), output_directory=tmp_path)
+        return_value=SimpleNamespace(manifest=manifest, output_directory=generated_package)
     )
 
     result = await cli.run_pipeline(dependencies, tmp_path, skip_images=True)
@@ -619,8 +995,13 @@ async def test_in_policy_measured_voiceover_reaches_visual_generation(tmp_path: 
     dependencies.pipeline.storyboard_service.generate = AsyncMock(
         return_value=SimpleNamespace(storyboard=ArtifactStub())
     )
+    manifest = voiceover_manifest(40)
+    generated_package = tmp_path / "generated-voiceover"
+    write_voiceover_package(generated_package, manifest, marker=b"new")
+    write_voiceover_package(tmp_path / "voiceover", manifest, marker=b"old")
+    (tmp_path / "voiceover" / "segments" / "stale.mp3").write_bytes(b"stale")
     dependencies.pipeline.voiceover_service.generate = AsyncMock(
-        return_value=SimpleNamespace(manifest=voiceover_manifest(40), output_directory=tmp_path)
+        return_value=SimpleNamespace(manifest=manifest, output_directory=generated_package)
     )
     mocks["visual"].generate.side_effect = RuntimeError("visual generation reached")
 
@@ -628,3 +1009,5 @@ async def test_in_policy_measured_voiceover_reaches_visual_generation(tmp_path: 
         await cli.run_pipeline(dependencies, tmp_path, skip_images=True)
 
     mocks["visual"].generate.assert_awaited_once()
+    assert (tmp_path / "voiceover" / manifest.combined_audio_filename).read_bytes() == b"new"
+    assert not (tmp_path / "voiceover" / "segments" / "stale.mp3").exists()

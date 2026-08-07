@@ -30,6 +30,7 @@ from shared.models.timeline import (
 )
 from shared.rendering.ffmpeg import ffmpeg_capabilities
 from shared.rendering.validation import validate_render_settings, validate_renderer_features
+from shared.visual.fonts import FontResolutionError, resolve_font_path
 
 
 class FFmpegCommandBuilder:
@@ -59,7 +60,14 @@ class FFmpegCommandBuilder:
         if job.readiness.value not in {"ready", "ready_with_warnings"}:
             raise FFmpegCommandBuildError("FFmpeg command planning requires a render-ready job.")
         warnings = [*job.warnings, *validate_render_settings(job.settings, ffmpeg_capabilities())]
-        warnings.extend(validate_renderer_features(job.timeline, ffmpeg_capabilities()))
+        warnings.extend(
+            validate_renderer_features(
+                job.timeline,
+                ffmpeg_capabilities(),
+                require_sound_effects_for_render=job.require_sound_effects_for_render,
+            )
+        )
+        warnings.extend(self._motion_fallback_warnings(job))
         if any(warning.blocking for warning in warnings):
             raise FFmpegCommandBuildError("FFmpeg job contains unsupported renderer requirements.")
         self._validate_encoding(job.settings)
@@ -198,15 +206,45 @@ class FFmpegCommandBuilder:
                     FFmpegFilterNode(
                         node_id=f"vmotion{index}",
                         inputs=[label],
-                        filter_expression=f"zoompan=z='{zoom}':d=1:s={job.settings.width}x{job.settings.height}",
+                        filter_expression=(
+                            f"zoompan=z='{zoom}':d=1:"
+                            f"s={job.settings.width}x{job.settings.height}:"
+                            f"fps={job.settings.frame_rate}"
+                        ),
                         output_label=f"vm{index}",
                     )
                 )
-            elif motion not in {TimelineMotionType.STATIC, TimelineMotionType.NONE}:
+            elif motion not in {TimelineMotionType.STATIC, TimelineMotionType.NONE} and not (
+                job.allow_static_fallback_for_unsupported_motion
+            ):
                 raise FFmpegCommandBuildError(
                     f"Motion {motion.value} is unsupported by the FFmpeg planner."
                 )
         return nodes
+
+    @staticmethod
+    def _motion_fallback_warnings(job: RenderJob) -> list[RenderWarning]:
+        if not job.allow_static_fallback_for_unsupported_motion:
+            return []
+        supported = {
+            TimelineMotionType.NONE,
+            TimelineMotionType.STATIC,
+            TimelineMotionType.SLOW_ZOOM_IN,
+            TimelineMotionType.SLOW_ZOOM_OUT,
+        }
+        counts: dict[TimelineMotionType, int] = {}
+        for clip in _clips(job, TimelineTrackType.VIDEO):
+            motion = clip.motion.motion_type if clip.motion else TimelineMotionType.NONE
+            if motion not in supported:
+                counts[motion] = counts.get(motion, 0) + 1
+        return [
+            _warning(
+                f"unsupported_motion_static_fallback:{motion.value}",
+                f"Unsupported motion '{motion.value}' omitted from {count} "
+                f"clip{'s' if count != 1 else ''}; static fallback used.",
+            )
+            for motion, count in counts.items()
+        ]
 
     def _final_video(self, nodes: list[FFmpegFilterNode], settings: RenderSettings) -> str:
         normalized = [node.output_label for node in nodes if node.node_id.startswith("vnorm")]
@@ -275,14 +313,20 @@ class FFmpegCommandBuilder:
         if not labels:
             raise FFmpegCommandBuildError("FFmpeg plan requires narration audio.")
         mix = "anull" if len(labels) == 1 else "amix=" + str(len(labels)) + ":normalize=0"
+        mixed = (
+            f"{mix},loudnorm=I={job.settings.loudness_target_lufs}:"
+            f"TP={job.settings.true_peak_target_db}"
+            if job.settings.normalize_audio
+            else mix
+        )
+        timeline_boundary = _seconds(job.timeline.summary.total_duration_seconds)
         nodes.append(
             FFmpegFilterNode(
                 node_id="afinalize",
                 inputs=labels,
                 filter_expression=(
-                    f"{mix},loudnorm=I={job.settings.loudness_target_lufs}:TP={job.settings.true_peak_target_db}"
-                    if job.settings.normalize_audio
-                    else mix
+                    f"{mixed},atrim=duration={timeline_boundary},"
+                    f"aresample={job.settings.sample_rate_hz},asetpts=PTS-STARTPTS"
                 ),
                 output_label="afinal",
             )
@@ -292,8 +336,16 @@ class FFmpegCommandBuilder:
     def _overlay_nodes(self, job: RenderJob, source_label: str) -> list[FFmpegFilterNode]:
         if not job.timeline.overlays:
             return []
-        if self._font_path is None:
+        font_path = job.overlay_font_path or self._font_path
+        if font_path is None:
             raise FFmpegCommandBuildError("FFmpeg overlay planning requires an explicit font path.")
+        try:
+            font_path = resolve_font_path(font_path)
+        except FontResolutionError as error:
+            raise FFmpegCommandBuildError(
+                "FFmpeg overlay font path is not a usable local file."
+            ) from error
+        escaped_font_path = _escape_filter_value(str(font_path))
         nodes: list[FFmpegFilterNode] = []
         active = source_label
         positions = {
@@ -311,7 +363,7 @@ class FFmpegCommandBuilder:
             text = overlay.text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
             x, y = position.split(":", maxsplit=1)
             expression = (
-                f"drawtext=fontfile={self._font_path}:text='{text}':x={x}:y={y}:"
+                f"drawtext=fontfile='{escaped_font_path}':text='{text}':x={x}:y={y}:"
                 f"enable='between(t,{_seconds(overlay.start_time_seconds)},"
                 f"{_seconds(overlay.end_time_seconds)})'"
             )
@@ -422,7 +474,7 @@ class FFmpegCommandBuilder:
         settings: RenderSettings,
     ) -> list[str]:
         return [
-            self._executable,
+            Path(self._executable).name,
             f"{len(inputs)} inputs",
             f"{settings.width}x{settings.height} @ {settings.frame_rate} fps",
             f"{settings.video_codec.value} + {settings.audio_codec.value}",
@@ -460,6 +512,10 @@ def _input_type(clip: TimelineClip) -> FFmpegInputType:
 
 def _seconds(value: float) -> str:
     return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def _escape_filter_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
 
 
 def _warning(category: str, message: str) -> RenderWarning:

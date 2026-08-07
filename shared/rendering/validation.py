@@ -66,6 +66,7 @@ def validate_timeline_render_readiness(
     *,
     allow_remote_sources: bool,
     allow_placeholders: bool,
+    require_sound_effects_for_render: bool = True,
 ) -> tuple[RenderReadiness, list[RenderWarning]]:
     """Assess renderability without mutating clips or requiring a concrete renderer."""
     warnings: list[RenderWarning] = []
@@ -78,31 +79,55 @@ def validate_timeline_render_readiness(
         return RenderReadiness.NOT_READY, warnings
     sources = collect_render_sources(timeline)
     for source in sources:
+        required_for_render = source.required or (
+            require_sound_effects_for_render and source.track_type == TimelineTrackType.SOUND_EFFECT
+        )
+        optional_sound_effect = _optional_unresolved_sound_effect(
+            source, require_sound_effects_for_render=require_sound_effects_for_render
+        )
         if source.status == TimelineClipStatus.MISSING:
             warnings.append(
                 _warning(
-                    "missing_required_source" if source.required else "missing_optional_source",
+                    "missing_required_source" if required_for_render else "missing_optional_source",
                     f"Source for clip {source.clip_id} is missing.",
                     clip_id=source.clip_id,
-                    blocking=source.required,
+                    blocking=required_for_render,
                 )
             )
         elif source.status == TimelineClipStatus.FAILED:
             warnings.append(
                 _warning(
-                    "failed_required_source" if source.required else "failed_optional_source",
+                    "failed_required_source" if required_for_render else "failed_optional_source",
                     f"Source for clip {source.clip_id} failed.",
                     clip_id=source.clip_id,
-                    blocking=source.required,
+                    blocking=required_for_render,
                 )
             )
         elif source.status in {TimelineClipStatus.PLACEHOLDER, TimelineClipStatus.REQUIRES_REVIEW}:
+            placeholder_message = (
+                f"Optional sound-effect instruction {source.clip_id} was omitted "
+                "from this render."
+                if optional_sound_effect
+                else f"Source for clip {source.clip_id} remains a placeholder "
+                "or requires review."
+            )
             warnings.append(
                 _warning(
-                    "unsupported_placeholder",
-                    f"Source for clip {source.clip_id} remains a placeholder or requires review.",
+                    (
+                        "optional_sound_effect_omitted"
+                        if optional_sound_effect
+                        else "unsupported_placeholder"
+                    ),
+                    placeholder_message,
                     clip_id=source.clip_id,
-                    blocking=source.required and not allow_placeholders,
+                    blocking=(
+                        required_for_render
+                        and not optional_sound_effect
+                        and (
+                            source.track_type == TimelineTrackType.SOUND_EFFECT
+                            or not allow_placeholders
+                        )
+                    ),
                 )
             )
         if source.status == TimelineClipStatus.READY:
@@ -116,7 +141,7 @@ def validate_timeline_render_readiness(
                         "missing_required_source" if source.required else "missing_optional_source",
                         f"Ready local source for clip {source.clip_id} is unavailable.",
                         clip_id=source.clip_id,
-                        blocking=source.required,
+                        blocking=True,
                     )
                 )
             if (
@@ -191,7 +216,10 @@ def validate_render_settings(
 
 
 def validate_renderer_features(
-    timeline: Timeline, capabilities: RendererCapabilities
+    timeline: Timeline,
+    capabilities: RendererCapabilities,
+    *,
+    require_sound_effects_for_render: bool = True,
 ) -> list[RenderWarning]:
     """Assess required timeline features against renderer capabilities once per feature."""
     clips = [clip for track in timeline.tracks for clip in track.clips]
@@ -235,7 +263,14 @@ def validate_renderer_features(
             "Timeline includes remote sources unsupported by the renderer.",
         ),
         (
-            any(clip.status != TimelineClipStatus.READY for clip in clips)
+            any(
+                clip.status != TimelineClipStatus.READY
+                and not _optional_unresolved_sound_effect_clip(
+                    clip,
+                    require_sound_effects_for_render=require_sound_effects_for_render,
+                )
+                for clip in clips
+            )
             and not capabilities.supports_placeholders,
             "unsupported_placeholder",
             "Timeline includes placeholders unsupported by the renderer.",
@@ -257,15 +292,25 @@ def build_render_job(
     capabilities: RendererCapabilities,
     output_directory: Path,
     created_at: datetime,
+    require_sound_effects_for_render: bool = True,
+    allow_static_fallback_for_unsupported_motion: bool = False,
+    overlay_font_path: Path | None = None,
 ) -> RenderJob:
     """Construct a deterministic pending/ready job without mutating the Timeline."""
     readiness, warnings = validate_timeline_render_readiness(
         timeline,
         allow_remote_sources=capabilities.supports_remote_sources,
         allow_placeholders=capabilities.supports_placeholders,
+        require_sound_effects_for_render=require_sound_effects_for_render,
     )
     warnings.extend(validate_render_settings(settings, capabilities))
-    warnings.extend(validate_renderer_features(timeline, capabilities))
+    warnings.extend(
+        validate_renderer_features(
+            timeline,
+            capabilities,
+            require_sound_effects_for_render=require_sound_effects_for_render,
+        )
+    )
     if settings.width != timeline.settings.width or settings.height != timeline.settings.height:
         warnings.append(
             _warning(
@@ -297,9 +342,12 @@ def build_render_job(
         timeline=timeline.model_copy(deep=True),
         settings=settings,
         output_directory=output_directory,
+        overlay_font_path=overlay_font_path,
         sources=collect_render_sources(timeline),
         readiness=readiness,
         warnings=warnings,
+        require_sound_effects_for_render=require_sound_effects_for_render,
+        allow_static_fallback_for_unsupported_motion=(allow_static_fallback_for_unsupported_motion),
         status=status,
         created_at=created_at,
         render_version="1.0",
@@ -341,6 +389,32 @@ def _required(track: TimelineTrack, clip: TimelineClip) -> bool:
     return bool(clip.metadata.get("required", False)) or (
         track.track_type in {TimelineTrackType.VIDEO, TimelineTrackType.NARRATION}
         and track.track_number == 1
+    )
+
+
+def _optional_unresolved_sound_effect(
+    source: RenderSourceReference, *, require_sound_effects_for_render: bool
+) -> bool:
+    return (
+        not require_sound_effects_for_render
+        and not source.required
+        and source.track_type == TimelineTrackType.SOUND_EFFECT
+        and source.status == TimelineClipStatus.REQUIRES_REVIEW
+        and source.source_type == TimelineAssetSource.GENERATED_INSTRUCTION
+        and source.source_path is None
+    )
+
+
+def _optional_unresolved_sound_effect_clip(
+    clip: TimelineClip, *, require_sound_effects_for_render: bool
+) -> bool:
+    return (
+        not require_sound_effects_for_render
+        and not bool(clip.metadata.get("required", False))
+        and clip.track_type == TimelineTrackType.SOUND_EFFECT
+        and clip.status == TimelineClipStatus.REQUIRES_REVIEW
+        and clip.source_type == TimelineAssetSource.GENERATED_INSTRUCTION
+        and clip.source_path is None
     )
 
 

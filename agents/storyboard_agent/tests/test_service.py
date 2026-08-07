@@ -40,14 +40,20 @@ class MockStoryboardAgent:
     def __init__(self, storyboard: Storyboard) -> None:
         self.storyboard = storyboard
         self.calls = 0
+        self.allowed_visual_asset_types: set[VisualAssetType] | None = None
+        self.max_ai_images: int | None = None
 
     async def generate(
         self,
         concept: VideoConcept,
         script: VideoScript,
         review: ScriptReview,
+        allowed_visual_asset_types: set[VisualAssetType] | None = None,
+        max_ai_images: int | None = None,
     ) -> Storyboard:
         self.calls += 1
+        self.allowed_visual_asset_types = allowed_visual_asset_types
+        self.max_ai_images = max_ai_images
         return self.storyboard
 
 
@@ -240,6 +246,121 @@ async def test_rejected_review_prevents_agent_execution(tmp_path: Path) -> None:
         await subject.generate(make_concept(), script, make_review(approved=False))
 
     assert agent.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "asset_type",
+    [
+        VisualAssetType.STOCK_VIDEO,
+        VisualAssetType.STOCK_IMAGE,
+        VisualAssetType.MOTION_GRAPHIC,
+        VisualAssetType.CHART,
+        VisualAssetType.SCREENSHOT,
+        VisualAssetType.SCREEN_RECORDING,
+        VisualAssetType.AI_VIDEO,
+    ],
+)
+async def test_restricted_profile_rejects_non_renderable_assets(
+    tmp_path: Path, asset_type: VisualAssetType
+) -> None:
+    script = make_script()
+    storyboard = make_storyboard(
+        script,
+        [
+            scene(
+                1,
+                0,
+                script.total_estimated_duration_seconds,
+                "problem",
+                asset_type,
+            )
+        ],
+    )
+    subject, _ = service(tmp_path, storyboard)
+
+    with pytest.raises(StoryboardValidationError, match="prohibited visual asset types"):
+        await subject.generate(
+            make_concept(),
+            script,
+            make_review(),
+            allowed_visual_asset_types={
+                VisualAssetType.AI_IMAGE,
+                VisualAssetType.TYPOGRAPHY,
+            },
+            max_ai_images=4,
+        )
+
+
+@pytest.mark.asyncio
+async def test_restricted_profile_accepts_ai_images_and_typography(tmp_path: Path) -> None:
+    script = make_script()
+    duration = script.total_estimated_duration_seconds
+    scenes = [
+        scene(1, 0, duration // 3, "problem", VisualAssetType.AI_IMAGE),
+        scene(
+            2,
+            duration // 3,
+            duration * 2 // 3,
+            "framework",
+            VisualAssetType.TYPOGRAPHY,
+            on_screen_text=["Choose your milestone"],
+        ),
+        scene(
+            3,
+            duration * 2 // 3,
+            duration,
+            "action",
+            VisualAssetType.TYPOGRAPHY,
+            on_screen_text=["Automate the transfer"],
+        ),
+    ]
+    subject, agent = service(tmp_path, make_storyboard(script, scenes))
+    allowed = {VisualAssetType.AI_IMAGE, VisualAssetType.TYPOGRAPHY}
+
+    artifacts = await subject.generate(
+        make_concept(),
+        script,
+        make_review(),
+        allowed_visual_asset_types=allowed,
+        max_ai_images=4,
+    )
+
+    assert agent.allowed_visual_asset_types == allowed
+    assert agent.max_ai_images == 4
+    assert {item.visual_asset_type for item in artifacts.storyboard.scenes} == allowed
+
+
+@pytest.mark.asyncio
+async def test_restricted_profile_rejects_ai_images_above_paid_limit(tmp_path: Path) -> None:
+    script = make_script()
+    duration = script.total_estimated_duration_seconds
+    section_ids = ("problem", "framework", "action", "action", "action")
+    scenes = [
+        scene(
+            index + 1,
+            duration * index // 5,
+            duration * (index + 1) // 5,
+            section_ids[index],
+            VisualAssetType.AI_IMAGE,
+        )
+        for index in range(5)
+    ]
+    subject, agent = service(tmp_path, make_storyboard(script, scenes))
+
+    with pytest.raises(StoryboardValidationError, match="5 AI images; maximum is 4"):
+        await subject.generate(
+            make_concept(),
+            script,
+            make_review(),
+            allowed_visual_asset_types={
+                VisualAssetType.AI_IMAGE,
+                VisualAssetType.TYPOGRAPHY,
+            },
+            max_ai_images=4,
+        )
+
+    assert agent.calls == 1
 
 
 @pytest.mark.asyncio

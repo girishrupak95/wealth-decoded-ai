@@ -172,14 +172,14 @@ async def test_script_agent_includes_explicit_length_policy_in_prompt_context(
     assert client.request is not None
     assert "production_fixture_short" in client.request.template
     assert '"min_words": 75' in client.request.template
-    assert "total spoken word count must be 75-110 words" in client.request.template
-    assert "target approximately 90 words" in client.request.template
+    assert "total spoken word count must be 75-82 words" in client.request.template
+    assert "target approximately 79 words" in client.request.template
     assert "total duration must be 30-45 seconds" in client.request.template.casefold()
-    assert "target approximately 38 seconds" in client.request.template
+    assert "target approximately 41 seconds" in client.request.template
     assert "override any conflicting duration or length guidance" in client.request.template
     assert (
-        "TOTAL SPOKEN WORDS = hook + intro + every sections[].narration + conclusion + CTA + "
-        "disclaimer" in client.request.template
+        "TOTAL SPOKEN WORDS = hook + intro + every sections[].narration + conclusion + CTA."
+        in client.request.template
     )
 
 
@@ -212,11 +212,11 @@ async def test_script_agent_includes_optional_editorial_constraints_after_resear
     assert "subscription language optional" in template
     assert template.index("ACTIVE EDITORIAL CONSTRAINTS") > template.index("Research:")
     assert "ALLOWED_SOURCE_REFERENCES" in template
-    assert "total spoken word count must be 75-110 words" in template
+    assert "total spoken word count must be 75-82 words" in template
     assert "character-for-character" in template
     assert "Do not put the total budget only in section narration" in client.request.template
     assert (
-        "hook 8-12 words; intro 0-8 words; section narration combined 45-60 words"
+        "hook 8-10 words; intro 0-4 words; section narration combined 45-52 words"
         in client.request.template
     )
     assert (

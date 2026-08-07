@@ -40,8 +40,8 @@ class OpenAISettings(BaseSettings):
 
     api_key: SecretStr
     model: str
-    temperature: float = Field(ge=0, le=2)
-    max_tokens: int = Field(gt=0)
+    temperature: float | None = Field(default=0.4, ge=0, le=2)
+    max_tokens: int = Field(default=4_000, gt=0)
 
 
 class VisualAssetSettings(BaseSettings):

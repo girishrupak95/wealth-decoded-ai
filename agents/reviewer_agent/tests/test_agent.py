@@ -38,7 +38,8 @@ async def test_reviewer_agent_validates_llm_response(tmp_path: Path) -> None:
     (prompts / "system.md").write_text("JSON", encoding="utf-8")
     (prompts / "user.md").write_text(
         "$video_concept $research_package $video_script "
-        "$script_length_policy $review_format_guidance",
+        "$script_length_policy $active_editorial_constraints "
+        "$authoritative_production_totals $review_format_guidance",
         encoding="utf-8",
     )
     knowledge = tmp_path / "knowledge"
@@ -122,12 +123,40 @@ async def test_reviewer_agent_validates_llm_response(tmp_path: Path) -> None:
     assert client.request is not None
     assert '"profile_name": "long_form"' in client.request.template
     assert "judge this script within 600-900 spoken words" in client.request.template
+    assert "ACTIVE EDITORIAL CONSTRAINTS" not in client.request.template
 
-    await agent.review(concept, research, script, short_production_fixture_policy())
+    await agent.review(
+        concept,
+        research,
+        script,
+        short_production_fixture_policy(),
+        ["Use a conversational, practical tone."],
+        {
+            "spoken_word_count": 80,
+            "duration_seconds": 33,
+            "min_words": 75,
+            "max_words": 82,
+            "min_duration_seconds": 30,
+            "max_duration_seconds": 45,
+        },
+    )
 
     assert client.request is not None
-    assert "75-110 spoken words" in client.request.template
+    assert "75-82 spoken words" in client.request.template
     assert "30-45 seconds" in client.request.template
     assert "Never require it to exceed these maximums" in client.request.template
     assert "omitted secondary research questions" in client.request.template
     assert "overrides conflicting duration guidance in concept metadata" in client.request.template
+    assert "ACTIVE EDITORIAL CONSTRAINTS" in client.request.template
+    assert "Use a conversational, practical tone." in client.request.template
+    assert "fixed $500 milestones" in client.request.template
+    assert "fixed one-month checkpoints" in client.request.template
+    assert "Personalized non-numeric progression is acceptable" in client.request.template
+    assert "Do not require explicit numeric milestone stages" in client.request.template
+    assert "one realistic scenario" in client.request.template
+    assert "concrete action-led CTA" in client.request.template
+    assert "source_references=[] and verification_required=true" in client.request.template
+    assert "AUTHORITATIVE PRODUCTION TOTALS" in client.request.template
+    assert "spoken_word_count: 80" in client.request.template
+    assert "duration_seconds: 33" in client.request.template
+    assert "Do not recalculate or independently estimate these values" in client.request.template

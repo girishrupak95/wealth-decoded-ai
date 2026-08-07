@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 from shared.exceptions.ai import RenderResultPersistenceError
@@ -30,8 +32,13 @@ class RenderResultPersistence:
             raise RenderResultPersistenceError("Render result files already exist.")
         try:
             await asyncio.to_thread(output_directory.mkdir, parents=True, exist_ok=True)
-            await _write_atomic(json_path, self._json_bytes(result))
-            await _write_atomic(markdown_path, self._markdown(title, result).encode("utf-8"))
+            await asyncio.to_thread(
+                _replace_result_files,
+                json_path,
+                self._json_bytes(result),
+                markdown_path,
+                self._markdown(title, result).encode("utf-8"),
+            )
         except (OSError, ValueError, TypeError) as error:
             raise RenderResultPersistenceError("Render result persistence failed.") from error
         return json_path, markdown_path
@@ -123,7 +130,56 @@ class RenderResultPersistence:
         return "\n".join(lines) + "\n"
 
 
+def _replace_result_files(
+    json_path: Path,
+    json_content: bytes,
+    markdown_path: Path,
+    markdown_content: bytes,
+) -> None:
+    """Stage and transactionally replace the canonical result companions."""
+    staging = Path(tempfile.mkdtemp(prefix=".render-result-", dir=json_path.parent))
+    staged_json = staging / json_path.name
+    staged_markdown = staging / markdown_path.name
+    backups = staging / "previous"
+    previous: dict[Path, Path] = {}
+    try:
+        staged_json.write_bytes(json_content)
+        staged_markdown.write_bytes(markdown_content)
+        json.loads(staged_json.read_text(encoding="utf-8"))
+        if not staged_markdown.read_text(encoding="utf-8").strip():
+            raise ValueError("Render result markdown is empty.")
+        backups.mkdir()
+        for canonical in (json_path, markdown_path):
+            if canonical.exists():
+                backup = backups / canonical.name
+                shutil.copy2(canonical, backup)
+                previous[canonical] = backup
+        replaced: list[Path] = []
+        try:
+            for staged, canonical in (
+                (staged_json, json_path),
+                (staged_markdown, markdown_path),
+            ):
+                _replace_path(staged, canonical)
+                replaced.append(canonical)
+        except OSError:
+            for canonical in reversed(replaced):
+                prior_backup = previous.get(canonical)
+                if prior_backup is not None:
+                    _replace_path(prior_backup, canonical)
+                else:
+                    canonical.unlink(missing_ok=True)
+            raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _replace_path(source: Path, destination: Path) -> None:
+    os.replace(source, destination)
+
+
 async def _write_atomic(path: Path, content: bytes) -> None:
+    """Retained single-file atomic helper for compatibility with local callers."""
     temporary = path.with_suffix(f"{path.suffix}.tmp")
     try:
         await asyncio.to_thread(temporary.write_bytes, content)

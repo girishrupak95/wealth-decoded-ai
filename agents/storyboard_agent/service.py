@@ -22,6 +22,7 @@ from shared.models.storyboard import (
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 from shared.storyboard.validation import (
+    StoryboardValidationError,
     calculate_production_warnings,
     calculate_storyboard_summary,
     validate_final_duration,
@@ -40,6 +41,8 @@ class StoryboardGenerator(Protocol):
         concept: VideoConcept,
         script: VideoScript,
         review: ScriptReview,
+        allowed_visual_asset_types: set[VisualAssetType] | None = None,
+        max_ai_images: int | None = None,
     ) -> Storyboard:
         """Return a validated, pre-normalization storyboard."""
 
@@ -67,6 +70,9 @@ class StoryboardGenerationService:
         script: VideoScript,
         review: ScriptReview,
         generated_at: datetime | None = None,
+        *,
+        allowed_visual_asset_types: set[VisualAssetType] | None = None,
+        max_ai_images: int | None = None,
     ) -> StoryboardGenerationArtifacts:
         """Generate, normalize, and save one production-ready storyboard."""
         if not review.approved:
@@ -75,7 +81,19 @@ class StoryboardGenerationService:
             )
 
         timestamp = generated_at or datetime.now(UTC)
-        generated_storyboard = await self._storyboard_agent.generate(concept, script, review)
+        if allowed_visual_asset_types is None:
+            generated_storyboard = await self._storyboard_agent.generate(concept, script, review)
+        else:
+            generated_storyboard = await self._storyboard_agent.generate(
+                concept,
+                script,
+                review,
+                allowed_visual_asset_types,
+                max_ai_images,
+            )
+        self._validate_visual_profile(
+            generated_storyboard, allowed_visual_asset_types, max_ai_images
+        )
         storyboard = self._normalize(generated_storyboard, script, timestamp)
         directory = self._output_root / timestamp.date().isoformat()
         await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
@@ -95,6 +113,39 @@ class StoryboardGenerationService:
             json_path=json_path,
             markdown_path=markdown_path,
         )
+
+    @staticmethod
+    def _validate_visual_profile(
+        storyboard: Storyboard,
+        allowed_types: set[VisualAssetType] | None,
+        max_ai_images: int | None,
+    ) -> None:
+        if allowed_types is None:
+            return
+        prohibited = sorted(
+            {
+                scene.visual_asset_type.value
+                for scene in storyboard.scenes
+                if scene.visual_asset_type not in allowed_types
+            }
+        )
+        if prohibited:
+            raise StoryboardValidationError(
+                "Storyboard contains prohibited visual asset types: " + ", ".join(prohibited)
+            )
+        ai_image_count = sum(
+            scene.visual_asset_type == VisualAssetType.AI_IMAGE for scene in storyboard.scenes
+        )
+        if max_ai_images is not None and ai_image_count > max_ai_images:
+            raise StoryboardValidationError(
+                f"Storyboard contains {ai_image_count} AI images; maximum is {max_ai_images}."
+            )
+        if any(
+            scene.visual_asset_type == VisualAssetType.TYPOGRAPHY
+            and not any(text.strip() for text in scene.on_screen_text)
+            for scene in storyboard.scenes
+        ):
+            raise StoryboardValidationError("Typography scenes require useful on-screen text.")
 
     @staticmethod
     def _normalize(

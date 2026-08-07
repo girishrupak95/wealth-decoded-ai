@@ -107,13 +107,19 @@ def build_dependencies(
     *,
     script_policy: ScriptLengthPolicy | None = None,
     visual_live_generation: bool | None = None,
-    include_disclaimer_in_audio: bool = True,
+    include_disclaimer_in_audio: bool | None = None,
     script_editorial_constraints: list[str] | None = None,
+    reviewer_editorial_constraints: list[str] | None = None,
 ) -> PipelineDependencies:
     """Construct dependencies without executing services, inspecting media, or creating files."""
     openai_settings = OpenAISettings()
     elevenlabs_settings = ElevenLabsSettings()
     visual_settings = VisualAssetSettings()
+    disclaimer_in_audio = (
+        include_disclaimer_in_audio
+        if include_disclaimer_in_audio is not None
+        else script_policy.include_disclaimer_in_spoken_count if script_policy is not None else True
+    )
     if visual_live_generation is not None:
         visual_settings = visual_settings.model_copy(
             update={
@@ -191,6 +197,7 @@ def build_dependencies(
             ),
             generated_root / REVIEWS_DIRECTORY_NAME,
             policy=script_policy,
+            editorial_constraints=reviewer_editorial_constraints,
         ),
         storyboard_service=StoryboardGenerationService(
             StoryboardAgent(
@@ -210,7 +217,7 @@ def build_dependencies(
             model_id=elevenlabs_settings.model_id,
             output_format=elevenlabs_settings.output_format,
             voice_settings=elevenlabs_settings.voice_settings(),
-            include_disclaimer_in_audio=include_disclaimer_in_audio,
+            include_disclaimer_in_audio=disclaimer_in_audio,
         ),
         visual_service=visual_service,
         visual_persistence=VisualAssetPersistence(generated_root),

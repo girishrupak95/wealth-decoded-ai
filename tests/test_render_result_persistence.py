@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pytest import MonkeyPatch
 
 from shared.exceptions.ai import RenderResultPersistenceError
 from shared.models.rendering import (
@@ -86,3 +87,76 @@ async def test_prior_results_are_protected_without_overwrite(tmp_path: Path) -> 
     await persistence.persist(result(tmp_path), title="A", output_directory=tmp_path / "render")
     with pytest.raises(RenderResultPersistenceError):
         await persistence.persist(result(tmp_path), title="A", output_directory=tmp_path / "render")
+
+
+@pytest.mark.asyncio
+async def test_overwrite_replaces_stale_failure_as_one_clean_result_package(
+    tmp_path: Path,
+) -> None:
+    persistence = RenderResultPersistence()
+    output = tmp_path / "render"
+    await persistence.persist(result(tmp_path, failed=True), title="Old", output_directory=output)
+
+    json_path, markdown_path = await persistence.persist(
+        result(tmp_path), title="Current", output_directory=output, overwrite=True
+    )
+
+    assert '"status": "completed"' in json_path.read_text()
+    assert "FFmpeg render failed." not in json_path.read_text()
+    assert "# Render Result: Current" in markdown_path.read_text()
+    assert not list(output.glob(".render-result-*"))
+
+
+@pytest.mark.asyncio
+async def test_overwrite_persists_latest_failure_over_previous_result(tmp_path: Path) -> None:
+    persistence = RenderResultPersistence()
+    output = tmp_path / "render"
+    await persistence.persist(result(tmp_path), title="Old Success", output_directory=output)
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"validated prior video")
+
+    json_path, markdown_path = await persistence.persist(
+        result(tmp_path, failed=True),
+        title="Latest Failure",
+        output_directory=output,
+        overwrite=True,
+    )
+
+    assert '"status": "failed"' in json_path.read_text()
+    assert "Latest Failure" in markdown_path.read_text()
+    assert video.read_bytes() == b"validated prior video"
+
+
+@pytest.mark.asyncio
+async def test_atomic_replacement_rolls_back_both_files_and_cleans_staging(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    persistence = RenderResultPersistence()
+    output = tmp_path / "render"
+    json_path, markdown_path = await persistence.persist(
+        result(tmp_path, failed=True), title="Previous", output_directory=output
+    )
+    previous_json = json_path.read_bytes()
+    previous_markdown = markdown_path.read_bytes()
+    from shared.rendering import persistence as persistence_module
+
+    original_replace = persistence_module._replace_path
+    calls = 0
+
+    def fail_second_replace(source: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated replacement failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(persistence_module, "_replace_path", fail_second_replace)
+
+    with pytest.raises(RenderResultPersistenceError, match="persistence failed"):
+        await persistence.persist(
+            result(tmp_path), title="Replacement", output_directory=output, overwrite=True
+        )
+
+    assert json_path.read_bytes() == previous_json
+    assert markdown_path.read_bytes() == previous_markdown
+    assert not list(output.glob(".render-result-*"))

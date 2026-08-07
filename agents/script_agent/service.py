@@ -126,7 +126,7 @@ class ScriptGenerationService:
             asyncio.to_thread(markdown_path.write_text, self._to_markdown(script), "utf-8"),
         )
         self._logger.info("script_generation_saved", output_directory=str(directory))
-        return ScriptGenerationArtifacts(
+        return ScriptGenerationArtifacts.model_construct(
             concept=concept,
             research=research,
             script=script,
@@ -171,6 +171,7 @@ class ScriptGenerationService:
             normalized = script.with_derived_metrics(
                 words_per_minute=self._words_per_minute,
                 visual_pause_seconds=self._visual_pause_seconds,
+                include_disclaimer=self._policy.include_disclaimer_in_spoken_count,
             )
             length_feedback = (
                 None

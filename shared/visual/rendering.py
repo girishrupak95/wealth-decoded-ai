@@ -15,6 +15,7 @@ from shared.constants import (
     DEFAULT_TYPOGRAPHY_PRIMARY,
     DEFAULT_TYPOGRAPHY_WIDTH,
 )
+from shared.visual.fonts import FontResolutionError, resolve_font_path
 from shared.visual.processing import checksum_sha256, write_bytes_atomic
 
 
@@ -118,17 +119,10 @@ class TypographyRenderer:
         return checksum_sha256(path)
 
     def _resolve_font(self) -> Path:
-        candidates = [
-            self._font_path,
-            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-            Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
-            Path("/System/Library/Fonts/Geneva.ttf"),
-            Path("/Library/Fonts/Arial.ttf"),
-        ]
-        for candidate in candidates:
-            if candidate and candidate.is_file():
-                return candidate
-        raise TypographyRenderError("No usable typography font was found")
+        try:
+            return resolve_font_path(self._font_path)
+        except FontResolutionError as error:
+            raise TypographyRenderError("No usable typography font was found") from error
 
     @staticmethod
     def _wrap(

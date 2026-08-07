@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,9 +39,14 @@ from shared.models.rendering import (
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import short_production_fixture_policy
 from shared.models.script_review import ScriptReview
-from shared.models.storyboard import Storyboard
+from shared.models.storyboard import Storyboard, VisualAssetType
 from shared.models.timeline import RenderReadiness as TimelineRenderReadiness
-from shared.models.timeline import Timeline
+from shared.models.timeline import (
+    Timeline,
+    TimelineAssetSource,
+    TimelineClipStatus,
+    TimelineTrackType,
+)
 from shared.models.topic import TopicCandidate
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
@@ -54,6 +60,7 @@ from shared.rendering.persistence import RenderResultPersistence
 from shared.rendering.validation import build_render_job
 from shared.timeline.builder import TimelineBuilderService
 from shared.timeline.persistence import TimelinePersistenceService
+from shared.visual.fonts import resolve_font_path
 from shared.visual.persistence import VisualAssetPersistence
 
 FIXTURE_TOPIC = "Why an Emergency Fund Matters"
@@ -70,6 +77,10 @@ FIXTURE_STAGES = (
     "render",
 )
 FIXTURE_MAX_STAGE_COUNT = 17
+FIXTURE_RENDERABLE_ASSET_TYPES = {
+    VisualAssetType.AI_IMAGE,
+    VisualAssetType.TYPOGRAPHY,
+}
 FIXTURE_EDITORIAL_CONSTRAINTS = (
     "Do not introduce a fixed starter amount such as $500.",
     "Do not introduce a fixed one-month checkpoint or savings timeline.",
@@ -95,7 +106,7 @@ FIXTURE_EDITORIAL_CONSTRAINTS = (
     ),
     "Keep subscription language optional and secondary; omit it when it makes the ending abrupt.",
     "Use conversational transitions rather than a compressed checklist.",
-    "Stay within the active 75-110 spoken-word and 30-45 second policy.",
+    "Stay within the active 75-82 spoken-word and 30-45 second policy.",
 )
 
 
@@ -213,6 +224,7 @@ def load_resume_artifacts(run_directory: Path, resume_from: str) -> dict[str, Ba
             ("script.json", VideoScript),
             ("review.json", ScriptReview),
             ("storyboard.json", Storyboard),
+            ("voiceover.json", VoiceoverManifest),
         ),
         "visuals": (
             ("topic.json", TopicCandidate),
@@ -254,6 +266,11 @@ def load_resume_artifacts(run_directory: Path, resume_from: str) -> dict[str, Ba
             artifacts[filename] = model.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValidationError) as error:
             raise ProductionFixtureError(f"Validated artifact is invalid: {filename}") from error
+    if resume_from == "voiceover":
+        package_manifest = _validate_voiceover_package(run_directory / "voiceover")
+        persisted_manifest = artifacts["voiceover.json"]
+        if package_manifest.model_dump(mode="json") != persisted_manifest.model_dump(mode="json"):
+            raise ProductionFixtureError("Validated voiceover artifacts do not match.")
     return artifacts
 
 
@@ -307,7 +324,10 @@ async def run_pipeline(
     artifacts = resume_artifacts or {}
 
     def is_reused(stage: str) -> bool:
-        return resume_from is not None and FIXTURE_STAGES.index(stage) < resume_index
+        return resume_from is not None and (
+            FIXTURE_STAGES.index(stage) < resume_index
+            or (resume_from == "voiceover" and stage == "voiceover")
+        )
 
     def artifact[ArtifactModel: BaseModel](
         filename: str, model: type[ArtifactModel]
@@ -422,7 +442,13 @@ async def run_pipeline(
         storyboard_artifacts = await _stage(
             7 + stage_offset,
             "Storyboard generation",
-            pipeline.storyboard_service.generate(concept, generated_script, reviewed_script),
+            pipeline.storyboard_service.generate(
+                concept,
+                generated_script,
+                reviewed_script,
+                allowed_visual_asset_types=FIXTURE_RENDERABLE_ASSET_TYPES,
+                max_ai_images=pipeline.visual_settings.max_live_images,
+            ),
         )
         storyboard = storyboard_artifacts.storyboard
         _write_model(run_directory / "storyboard.json", storyboard)
@@ -439,8 +465,8 @@ async def run_pipeline(
         )
         voiceover_manifest = voiceover.manifest
         voiceover_directory = run_directory / "voiceover"
+        _replace_voiceover_directory_atomic(voiceover.output_directory, voiceover_directory)
         _write_model(run_directory / "voiceover.json", voiceover_manifest)
-        _copy_directory(voiceover.output_directory, voiceover_directory)
         duration_message = _short_form_duration_rejection(voiceover_manifest)
         if duration_message is not None:
             print(duration_message)
@@ -474,7 +500,9 @@ async def run_pipeline(
 
     if is_reused("timeline"):
         timeline = artifact("timeline/timeline.json", Timeline)
-        _reused_stage(11, "Timeline persistence")
+        timeline = _with_optional_sound_effect_warning(timeline)
+        _write_model(run_directory / "timeline" / "timeline.json", timeline)
+        _reused_stage(12, "Timeline persistence")
     else:
         segment_paths = {
             segment.segment_id: voiceover_directory / "segments" / segment.audio_filename
@@ -488,15 +516,16 @@ async def run_pipeline(
             primary_duration_seconds=voiceover_manifest.generated_duration_seconds,
             maximum_primary_duration_seconds=short_production_fixture_policy().max_duration_seconds,
         )
+        timeline = _with_optional_sound_effect_warning(timeline)
         print_stage_update(
-            12 + stage_offset,
+            11 + stage_offset,
             "Timeline builder",
             "completed",
             "completed",
             perf_counter() - started,
         )
         timeline_result = await _stage(
-            11 + stage_offset,
+            12 + stage_offset,
             "Timeline persistence",
             pipeline.timeline_persistence.persist(timeline),
         )
@@ -517,6 +546,9 @@ async def run_pipeline(
         overwrite_existing=False,
     )
     capabilities = await dependencies.renderer.capabilities()
+    overlay_font_path = (
+        resolve_font_path(FFmpegRenderSettings().render_font_path) if timeline.overlays else None
+    )
     job = build_render_job(
         job_id=f"emergency-fund-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}",
         timeline=timeline,
@@ -525,6 +557,9 @@ async def run_pipeline(
         capabilities=capabilities,
         output_directory=run_directory / "render",
         created_at=datetime.now(UTC),
+        require_sound_effects_for_render=False,
+        allow_static_fallback_for_unsupported_motion=True,
+        overlay_font_path=overlay_font_path,
     )
     plan = dependencies.builder.build(job)
     print_stage_update(
@@ -536,7 +571,10 @@ async def run_pipeline(
     )
     result = await dependencies.renderer.render(job)
     json_path, markdown_path = await dependencies.result_persistence.persist(
-        result, title=job.title, output_directory=job.output_directory
+        result,
+        title=job.title,
+        output_directory=job.output_directory,
+        overwrite=resume_from in {"timeline", "render"},
     )
     if result.status not in {RenderJobStatus.COMPLETED, RenderJobStatus.COMPLETED_WITH_WARNINGS}:
         raise ProductionFixtureError(result.error_message or "FFmpeg render failed.")
@@ -682,14 +720,77 @@ def _write_model(path: Path, model: BaseModel) -> None:
     path.write_text(json.dumps(model.model_dump(mode="json"), indent=2), encoding="utf-8")
 
 
+def _with_optional_sound_effect_warning(timeline: Timeline) -> Timeline:
+    """Record fixture-only SFX omissions without changing truthful clip state."""
+    count = sum(
+        1
+        for track in timeline.tracks
+        for clip in track.clips
+        if track.track_type == TimelineTrackType.SOUND_EFFECT
+        and clip.status == TimelineClipStatus.REQUIRES_REVIEW
+        and clip.source_type == TimelineAssetSource.GENERATED_INSTRUCTION
+        and clip.source_path is None
+        and not bool(clip.metadata.get("required", False))
+    )
+    if count == 0:
+        return timeline
+    warning = f"{count} optional sound-effect instructions were omitted from this render."
+    return timeline.model_copy(
+        deep=True,
+        update={"warnings": list(dict.fromkeys([*timeline.warnings, warning]))},
+    )
+
+
 def _copy_file(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
 
 
-def _copy_directory(source: Path, destination: Path) -> None:
-    """Make newly generated voiceover media available inside its production run."""
-    shutil.copytree(source, destination)
+def _replace_voiceover_directory_atomic(source: Path, destination: Path) -> None:
+    """Validate and atomically replace the canonical voiceover package."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_root = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-replacement-", dir=destination.parent)
+    )
+    staged = temporary_root / "package"
+    previous = temporary_root / "previous"
+    moved_previous = False
+    try:
+        shutil.copytree(source, staged)
+        _validate_voiceover_package(staged)
+        if destination.exists():
+            os.replace(destination, previous)
+            moved_previous = True
+        try:
+            os.replace(staged, destination)
+        except OSError:
+            if moved_previous and previous.exists() and not destination.exists():
+                os.replace(previous, destination)
+            raise
+        if previous.exists():
+            shutil.rmtree(previous)
+    except (OSError, shutil.Error, ValidationError, ProductionFixtureError) as error:
+        raise ProductionFixtureError(
+            "Existing voiceover package could not be replaced safely."
+        ) from error
+    finally:
+        shutil.rmtree(temporary_root, ignore_errors=True)
+
+
+def _validate_voiceover_package(directory: Path) -> VoiceoverManifest:
+    """Load a complete canonical package and verify every referenced audio file."""
+    manifest_path = directory / "voiceover-manifest.json"
+    try:
+        manifest = VoiceoverManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValidationError) as error:
+        raise ProductionFixtureError("Existing voiceover package is invalid.") from error
+    required_paths = [
+        directory / manifest.combined_audio_filename,
+        *[directory / "segments" / segment.audio_filename for segment in manifest.segments],
+    ]
+    if any(not path.is_file() for path in required_paths):
+        raise ProductionFixtureError("Existing voiceover package is invalid.")
+    return manifest
 
 
 async def _close(dependencies: ProductionDependencies) -> None:

@@ -21,6 +21,7 @@ class ScriptLengthPolicy(BaseModel):
     target_words: int | None = Field(default=None, gt=0)
     target_duration_seconds: int | None = Field(default=None, gt=0)
     profile_name: str = "long_form"
+    include_disclaimer_in_spoken_count: bool = True
 
     @model_validator(mode="after")
     def validate_bounds(self) -> "ScriptLengthPolicy":
@@ -51,10 +52,11 @@ def short_production_fixture_policy() -> ScriptLengthPolicy:
     """Return the explicit short-form policy required by the production fixture."""
     return ScriptLengthPolicy(
         min_words=75,
-        max_words=110,
+        max_words=82,
         min_duration_seconds=30,
         max_duration_seconds=45,
-        target_words=90,
-        target_duration_seconds=38,
+        target_words=79,
+        target_duration_seconds=41,
         profile_name="production_fixture_short",
+        include_disclaimer_in_spoken_count=False,
     )

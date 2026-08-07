@@ -8,7 +8,7 @@ from app.config.settings import OpenAISettings
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.exceptions.ai import OpenAIRequestError
 
-_LEGACY_OPTIONAL_PARAMETER_MODEL_PREFIXES = ("gpt-3.5", "gpt-4", "o1-")
+_TEMPERATURE_SUPPORTED_MODEL_PREFIXES = ("gpt-3.5", "gpt-4")
 
 
 class OpenAIClient(LLMClient):
@@ -26,11 +26,28 @@ class OpenAIClient(LLMClient):
                 "openai_request_failed",
                 error_type=type(error).__name__,
                 provider_category=category,
+                model=self._settings.model,
             )
             raise OpenAIRequestError(message) from error
+        incomplete_reason = self._incomplete_reason(response)
+        if incomplete_reason == "max_output_tokens":
+            self._logger.error(
+                "openai_response_incomplete",
+                error_type=type(response).__name__,
+                provider_category="output_token_limit_reached",
+                model=self._settings.model,
+                incomplete_reason=incomplete_reason,
+            )
+            raise OpenAIRequestError(
+                "OpenAI response was truncated because the output-token limit was reached."
+            )
         output_text: object = response.output_text
         if not isinstance(output_text, str) or not output_text:
-            self._logger.error("openai_request_failed", provider_category="empty_response")
+            self._logger.error(
+                "openai_request_failed",
+                provider_category="empty_response",
+                model=self._settings.model,
+            )
             raise OpenAIRequestError("OpenAI returned an empty response.")
         return output_text
 
@@ -51,15 +68,23 @@ class OpenAIClient(LLMClient):
         }
         if request.system_template is not None:
             parameters["instructions"] = request.system_template
-        if self._supports_optional_parameters():
+        parameters["max_output_tokens"] = self._settings.max_tokens
+        if self._supports_temperature():
             if self._settings.temperature is not None:
                 parameters["temperature"] = self._settings.temperature
-            parameters["max_output_tokens"] = self._settings.max_tokens
         return parameters
 
-    def _supports_optional_parameters(self) -> bool:
+    def _supports_temperature(self) -> bool:
         model = self._settings.model.casefold()
-        return model.startswith(_LEGACY_OPTIONAL_PARAMETER_MODEL_PREFIXES)
+        return model.startswith(_TEMPERATURE_SUPPORTED_MODEL_PREFIXES)
+
+    @staticmethod
+    def _incomplete_reason(response: object) -> str | None:
+        if getattr(response, "status", None) != "incomplete":
+            return None
+        incomplete_details = getattr(response, "incomplete_details", None)
+        reason = getattr(incomplete_details, "reason", None)
+        return reason if isinstance(reason, str) else None
 
     @staticmethod
     def _request_error_details(error: Exception) -> tuple[str, str]:

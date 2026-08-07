@@ -2,31 +2,48 @@
 
 import argparse
 import asyncio
+import re
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Protocol
+from typing import Protocol, cast
 
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import APIConnectionError, AsyncOpenAI
 from pydantic import ValidationError
 
 from app.config.settings import OpenAISettings, VisualAssetSettings
 
 CLI_LOGGER = logger.bind(component="openai-verification-cli")
-DIAGNOSTIC_PROMPT = "Reply with exactly:\n\nOpenAI ready"
-DIAGNOSTIC_MAX_OUTPUT_TOKENS = 10
+DIAGNOSTIC_PROMPT = "Reply with exactly: OpenAI ready"
 
 
 class OpenAIVerificationError(ValueError):
     """A safe, categorized OpenAI diagnostic failure."""
 
+    def __init__(
+        self,
+        category: str,
+        *,
+        status_code: int | None = None,
+        provider_error_code: str | None = None,
+    ) -> None:
+        super().__init__(category)
+        self.status_code = status_code
+        self.provider_error_code = provider_error_code
+
 
 class ResponsesClient(Protocol):
     """Minimal responses API surface used by the diagnostic."""
 
-    async def create(self, *, model: str, input: str, max_output_tokens: int) -> object: ...
+    async def create(self, *, model: str, input: str) -> object: ...
+
+
+class ModelsClient(Protocol):
+    """Minimal models API surface used for non-generative project discovery."""
+
+    async def list(self) -> object: ...
 
 
 class OpenAIClient(Protocol):
@@ -34,6 +51,9 @@ class OpenAIClient(Protocol):
 
     @property
     def responses(self) -> ResponsesClient: ...
+
+    @property
+    def models(self) -> ModelsClient: ...
 
 
 @dataclass(frozen=True)
@@ -51,12 +71,14 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
         description="Verify OpenAI authentication and configured model access."
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--list-models", action="store_true")
+    parser.add_argument("--model-filter", choices=("gpt", "image"))
     return parser.parse_args(arguments)
 
 
-def build_client(settings: OpenAISettings) -> AsyncOpenAI:
+def build_client(settings: OpenAISettings) -> OpenAIClient:
     """Construct the configured OpenAI SDK client without sending a request."""
-    return AsyncOpenAI(api_key=settings.api_key.get_secret_value())
+    return cast(OpenAIClient, AsyncOpenAI(api_key=settings.api_key.get_secret_value()))
 
 
 def verify_configuration(
@@ -80,14 +102,29 @@ async def verify_chat_model(client: OpenAIClient, model: str) -> int:
     """Issue the bounded diagnostic request and return its rounded latency in milliseconds."""
     started = perf_counter()
     try:
-        await client.responses.create(
-            model=model,
-            input=DIAGNOSTIC_PROMPT,
-            max_output_tokens=DIAGNOSTIC_MAX_OUTPUT_TOKENS,
-        )
+        response = await client.responses.create(model=model, input=DIAGNOSTIC_PROMPT)
     except Exception as error:
         raise _verification_error(error) from error
+    output_text = getattr(response, "output_text", None)
+    if not isinstance(output_text, str) or "openai ready" not in output_text.casefold():
+        raise OpenAIVerificationError("Verification response did not contain 'OpenAI ready'.")
     return round((perf_counter() - started) * 1_000)
+
+
+async def list_models(client: OpenAIClient, model_filter: str | None = None) -> list[str]:
+    """Return sorted model IDs visible to this project without making a generation request."""
+    try:
+        response = await client.models.list()
+    except Exception as error:
+        raise _verification_error(error) from error
+    model_ids = sorted(
+        model_id
+        for item in getattr(response, "data", [])
+        if isinstance((model_id := getattr(item, "id", None)), str)
+    )
+    if model_filter is not None:
+        return [model_id for model_id in model_ids if model_filter in model_id.lower()]
+    return model_ids
 
 
 def verify_image_configuration(visual_settings: VisualAssetSettings) -> str:
@@ -114,11 +151,28 @@ def print_success_summary(result: OpenAIVerification) -> None:
     print("READY")
 
 
-def print_failure_summary(error: Exception, *, verbose: bool) -> None:
+def print_model_list(model_ids: Sequence[str]) -> None:
+    """Print only visible model identifiers from the official models-list endpoint."""
+    print("Visible OpenAI models:")
+    for model_id in model_ids:
+        print(model_id)
+
+
+def print_failure_summary(
+    error: OpenAIVerificationError,
+    *,
+    verbose: bool,
+    configured_model: str | None,
+) -> None:
     """Print only a classified safe failure and optional exception class."""
     print(f"OpenAI verification failed: {error}", file=sys.stderr)
     if verbose:
         print(f"Exception class: {type(error).__name__}", file=sys.stderr)
+        if error.status_code is not None:
+            print(f"HTTP status code: {error.status_code}", file=sys.stderr)
+        if error.provider_error_code is not None:
+            print(f"Provider error code: {error.provider_error_code}", file=sys.stderr)
+        print(f"Configured model: {configured_model or 'Not available'}", file=sys.stderr)
 
 
 async def async_main(
@@ -131,15 +185,20 @@ async def async_main(
     """Validate configuration and perform one low-cost chat diagnostic request."""
     options = arguments or parse_arguments([])
     client: OpenAIClient | None = None
+    configured_model: str | None = None
     try:
         configured_openai = openai_settings or _load_openai_settings()
         configured_visual = visual_settings or VisualAssetSettings()
         verify_configuration(configured_openai, configured_visual)
+        configured_model = configured_openai.model
         client = (
             build_client(configured_openai)
             if client_factory is None
             else client_factory(configured_openai)
         )
+        if options.list_models:
+            print_model_list(await list_models(client, options.model_filter))
+            return 0
         latency_ms = await verify_chat_model(client, configured_openai.model)
         result = OpenAIVerification(
             chat_model=configured_openai.model,
@@ -150,12 +209,14 @@ async def async_main(
         return 0
     except OpenAIVerificationError as error:
         CLI_LOGGER.warning("openai_verification_failed", error_type=type(error).__name__)
-        print_failure_summary(error, verbose=options.verbose)
+        print_failure_summary(error, verbose=options.verbose, configured_model=configured_model)
         return 1
     except Exception as error:
         safe_error = OpenAIVerificationError("Unexpected API error.")
         CLI_LOGGER.warning("openai_verification_failed", error_type=type(error).__name__)
-        print_failure_summary(safe_error, verbose=options.verbose)
+        print_failure_summary(
+            safe_error, verbose=options.verbose, configured_model=configured_model
+        )
         return 1
     finally:
         if client is not None:
@@ -191,15 +252,56 @@ def _load_openai_settings() -> OpenAISettings:
 
 def _verification_error(error: Exception) -> OpenAIVerificationError:
     status_code = getattr(error, "status_code", None)
+    error_code = _safe_error_code(getattr(error, "code", None))
+    if isinstance(error, (APIConnectionError, ConnectionError, TimeoutError, OSError)):
+        return OpenAIVerificationError("Network or connection failure.")
     if status_code == 401:
-        return OpenAIVerificationError("Authentication failed.")
+        return OpenAIVerificationError(
+            "Authentication failed.", status_code=status_code, provider_error_code=error_code
+        )
     if status_code == 403:
-        return OpenAIVerificationError("Permission denied.")
-    if status_code in {400, 404}:
-        return OpenAIVerificationError("Invalid model.")
+        return OpenAIVerificationError(
+            "Permission denied.", status_code=status_code, provider_error_code=error_code
+        )
+    if status_code == 404:
+        return OpenAIVerificationError(
+            "Model not found or inaccessible.",
+            status_code=status_code,
+            provider_error_code=error_code,
+        )
+    if status_code in {400, 422}:
+        return OpenAIVerificationError(
+            "Invalid request.", status_code=status_code, provider_error_code=error_code
+        )
     if status_code == 429:
-        return OpenAIVerificationError("Quota exceeded.")
-    return OpenAIVerificationError("Unexpected API error.")
+        category = (
+            "Rate limited." if error_code and "rate" in error_code else "Quota or billing limit."
+        )
+        return OpenAIVerificationError(
+            category, status_code=status_code, provider_error_code=error_code
+        )
+    if isinstance(status_code, int) and 500 <= status_code <= 599:
+        return OpenAIVerificationError(
+            "Provider unavailable.", status_code=status_code, provider_error_code=error_code
+        )
+    return OpenAIVerificationError(
+        "Unexpected API error.",
+        status_code=status_code if isinstance(status_code, int) else None,
+        provider_error_code=error_code,
+    )
+
+
+def _safe_error_code(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > 100
+        or re.fullmatch(r"[A-Za-z0-9_.-]+", normalized) is None
+    ):
+        return None
+    return normalized
 
 
 async def _close_client(client: object) -> None:

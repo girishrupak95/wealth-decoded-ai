@@ -15,8 +15,10 @@ class OutputValidator:
             payload = json.loads(value)
             if not isinstance(payload, dict):
                 raise ValueError("Output must be a JSON object.")
-            return schema.model_validate(payload).model_dump(mode="json")
-        except (json.JSONDecodeError, ValidationError, ValueError) as error:
+            return schema.model_validate(payload, extra="forbid").model_dump(mode="json")
+        except ValidationError as error:
+            raise OutputValidationError(str(error), error_count=error.error_count()) from error
+        except (json.JSONDecodeError, ValueError) as error:
             raise OutputValidationError(str(error)) from error
 
     def validate_model(
@@ -24,6 +26,6 @@ class OutputValidator:
     ) -> BaseModel:
         payload = value.model_dump() if isinstance(value, BaseModel) else value
         try:
-            return model.model_validate(payload)
+            return model.model_validate(payload, extra="forbid")
         except ValidationError as error:
-            raise OutputValidationError(str(error)) from error
+            raise OutputValidationError(str(error), error_count=error.error_count()) from error

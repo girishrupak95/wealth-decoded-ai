@@ -182,9 +182,12 @@ class RenderJob(BaseModel):
     timeline: Timeline
     settings: RenderSettings
     output_directory: Path
+    overlay_font_path: Path | None = None
     sources: list[RenderSourceReference]
     readiness: RenderReadiness
     warnings: list[RenderWarning] = Field(default_factory=list)
+    require_sound_effects_for_render: bool = True
+    allow_static_fallback_for_unsupported_motion: bool = False
     status: RenderJobStatus
     created_at: datetime
     render_version: str = Field(min_length=1)

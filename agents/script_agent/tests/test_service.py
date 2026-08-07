@@ -262,7 +262,7 @@ async def test_service_retries_with_corrective_feedback(tmp_path: Path) -> None:
 async def test_service_translates_reviewer_feedback_into_rewrite_instructions(
     tmp_path: Path,
 ) -> None:
-    generator = PolicyAwareSequencedScriptGenerator([make_script_with_narration("word " * 28)])
+    generator = PolicyAwareSequencedScriptGenerator([make_script_with_narration("word " * 26)])
     service = ScriptGenerationService(
         generator,
         tmp_path,
@@ -366,8 +366,8 @@ async def test_generate_revision_preserves_script_context_findings_and_policy(
     tmp_path: Path,
 ) -> None:
     policy = short_production_fixture_policy()
-    previous_script = make_script_with_narration("word " * 28)
-    revised_script = make_script_with_narration("word " * 28)
+    previous_script = make_script_with_narration("word " * 26)
+    revised_script = make_script_with_narration("word " * 26)
     generator = PolicyAwareSequencedScriptGenerator([revised_script])
     service = ScriptGenerationService(generator, tmp_path, policy=policy)
     review = ScriptReview(
@@ -416,9 +416,9 @@ async def test_generate_revision_preserves_script_context_findings_and_policy(
 async def test_editorial_constraints_reach_initial_generation_and_revision(tmp_path: Path) -> None:
     policy = short_production_fixture_policy()
     constraints = ["Do not introduce a fixed starter amount such as $500."]
-    previous_script = make_script_with_narration("word " * 28)
+    previous_script = make_script_with_narration("word " * 26)
     generator = PolicyAwareSequencedScriptGenerator(
-        [make_script_with_narration("word " * 28), make_script_with_narration("word " * 28)]
+        [make_script_with_narration("word " * 26), make_script_with_narration("word " * 26)]
     )
     service = ScriptGenerationService(
         generator,
@@ -464,7 +464,7 @@ async def test_service_combines_source_and_length_corrections_in_one_retry(tmp_p
     generator = PolicyAwareSequencedScriptGenerator(
         [
             ScriptSourceReferenceError(invalid_script, {"Altered Federal Reserve reference"}),
-            make_script_with_narration("word " * 28),
+            make_script_with_narration("word " * 26),
         ]
     )
     service = ScriptGenerationService(
@@ -476,14 +476,14 @@ async def test_service_combines_source_and_length_corrections_in_one_retry(tmp_p
 
     artifacts = await service.generate(make_concept(), make_research())
 
-    assert 75 <= artifacts.script.estimated_word_count <= 110
+    assert 75 <= artifacts.script.estimated_word_count <= 82
     feedback = generator.feedback[1]
     assert feedback is not None
     assert "Altered Federal Reserve reference" in feedback
     assert "Consumer finance guidance" in feedback
     assert "character-for-character" in feedback
     assert "Actual total spoken words:" in feedback
-    assert "Required word range: 75-110" in feedback
+    assert "Required word range: 75-82" in feedback
     assert "Required duration range: 30-45 seconds" in feedback
 
 
@@ -504,7 +504,7 @@ async def test_short_policy_rejects_total_words_above_maximum_and_reports_breakd
     compliant = make_total_word_script(
         hook_words=10,
         intro_words=5,
-        section_words=13,
+        section_words=10,
         conclusion_words=8,
         cta_words=5,
         disclaimer_words=10,
@@ -512,17 +512,20 @@ async def test_short_policy_rejects_total_words_above_maximum_and_reports_breakd
         reported_duration=999,
     )
     generator = PolicyAwareSequencedScriptGenerator([over_budget, compliant])
+    policy = short_production_fixture_policy().model_copy(
+        update={"include_disclaimer_in_spoken_count": True}
+    )
     service = ScriptGenerationService(
         generator,
         tmp_path,
-        policy=short_production_fixture_policy(),
+        policy=policy,
         max_retries=1,
     )
 
     artifacts = await service.generate(make_concept(), make_research())
 
-    assert artifacts.script.estimated_word_count == 90
-    assert artifacts.script.total_estimated_duration_seconds == 37
+    assert artifacts.script.estimated_word_count == 78
+    assert artifacts.script.total_estimated_duration_seconds == 32
     assert all(
         section.source_references == ["Consumer finance guidance"]
         for section in artifacts.script.sections
@@ -530,6 +533,6 @@ async def test_short_policy_rejects_total_words_above_maximum_and_reports_breakd
     feedback = generator.feedback[1]
     assert feedback is not None
     assert "Actual total spoken words: 129" in feedback
-    assert "Remove at least 19 words across all spoken fields." in feedback
+    assert "Remove at least 47 words across all spoken fields." in feedback
     assert "hook=12, intro=10, section narration combined=68" in feedback
     assert "conclusion=10, CTA=8, disclaimer=21" in feedback

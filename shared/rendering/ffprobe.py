@@ -71,6 +71,11 @@ def _normalize(payload: dict[str, Any], path: Path) -> dict[str, object]:
         raise FFprobeUnavailableError("FFprobe output is missing required media fields.") from error
     return {
         "duration_seconds": duration,
+        "format_start_time_seconds": _optional_number(format_data.get("start_time")),
+        "video_start_time_seconds": _optional_number(video.get("start_time")),
+        "audio_start_time_seconds": _optional_number(audio.get("start_time")),
+        "video_duration_seconds": _optional_number(video.get("duration")),
+        "audio_duration_seconds": _optional_number(audio.get("duration")),
         "width": width,
         "height": height,
         "frame_rate": _frame_rate(str(video.get("r_frame_rate", "0"))),
@@ -96,6 +101,15 @@ def _optional_int(value: object) -> int | None:
             return int(value)
         if isinstance(value, (int, float)):
             return int(value)
+        return None
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_number(value: object) -> float | None:
+    try:
+        if isinstance(value, (str, int, float)):
+            return float(value)
         return None
     except (TypeError, ValueError):
         return None

@@ -12,6 +12,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from shared.constants import (
+    DEFAULT_SCRIPT_WORDS_PER_MINUTE,
     JSON_FILE_SUFFIX,
     MARKDOWN_FILE_SUFFIX,
 )
@@ -39,6 +40,8 @@ class PolicyAwareEditorialReviewer(EditorialReviewer, Protocol):
         research: ResearchPackage,
         script: VideoScript,
         policy: ScriptLengthPolicy | None = None,
+        editorial_constraints: list[str] | None = None,
+        authoritative_totals: dict[str, int] | None = None,
     ) -> ScriptReview:
         """Return an editorial review aligned with the active script policy."""
         ...
@@ -60,11 +63,13 @@ class ScriptReviewService:
         output_root: Path,
         *,
         policy: ScriptLengthPolicy | None = None,
+        editorial_constraints: list[str] | None = None,
     ) -> None:
         self._reviewer_agent = reviewer_agent
         self._output_root = output_root
         self._policy = policy or ScriptLengthPolicy()
         self._uses_explicit_policy = policy is not None
+        self._editorial_constraints = list(editorial_constraints or [])
         self._logger = logger.bind(component=self.__class__.__name__)
 
     async def review(
@@ -75,8 +80,10 @@ class ScriptReviewService:
         reviewed_at: datetime | None = None,
     ) -> ScriptReviewArtifacts:
         timestamp = reviewed_at or datetime.now(UTC)
-        deterministic = self._precheck(script)
-        editorial = await self._review(concept, research, script)
+        totals = self._authoritative_totals(script)
+        deterministic = self._precheck(script, research, totals)
+        editorial = await self._review(concept, research, script, totals)
+        editorial = self._remove_inconsistent_length_findings(editorial, totals)
         merged = self._merge(script, editorial, deterministic, timestamp)
         directory = self._output_root / timestamp.date().isoformat()
         await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
@@ -98,51 +105,85 @@ class ScriptReviewService:
         )
 
     async def _review(
-        self, concept: VideoConcept, research: ResearchPackage, script: VideoScript
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        script: VideoScript,
+        authoritative_totals: dict[str, int],
     ) -> ScriptReview:
-        if not self._uses_explicit_policy:
+        if self._accepts_review_parameter("authoritative_totals"):
+            policy_aware_reviewer = cast(PolicyAwareEditorialReviewer, self._reviewer_agent)
+            return await policy_aware_reviewer.review(
+                concept,
+                research,
+                script,
+                self._policy if self._uses_explicit_policy else None,
+                self._editorial_constraints or None,
+                authoritative_totals,
+            )
+        if not self._uses_explicit_policy and not self._editorial_constraints:
             return await self._reviewer_agent.review(concept, research, script)
         if self._accepts_policy():
             policy_aware_reviewer = cast(PolicyAwareEditorialReviewer, self._reviewer_agent)
-            return await policy_aware_reviewer.review(concept, research, script, self._policy)
+            if self._editorial_constraints and self._accepts_editorial_constraints():
+                return await policy_aware_reviewer.review(
+                    concept,
+                    research,
+                    script,
+                    self._policy if self._uses_explicit_policy else None,
+                    self._editorial_constraints,
+                    authoritative_totals,
+                )
+            return await policy_aware_reviewer.review(
+                concept, research, script, self._policy, None, authoritative_totals
+            )
         return await self._reviewer_agent.review(concept, research, script)
 
     def _accepts_policy(self) -> bool:
+        return self._accepts_review_parameter("policy")
+
+    def _accepts_editorial_constraints(self) -> bool:
+        return self._accepts_review_parameter("editorial_constraints")
+
+    def _accepts_review_parameter(self, parameter_name: str) -> bool:
         try:
             parameters = signature(self._reviewer_agent.review).parameters.values()
         except (TypeError, ValueError):
             return False
         return any(
-            parameter.name == "policy" or parameter.kind is Parameter.VAR_KEYWORD
+            parameter.name == parameter_name or parameter.kind is Parameter.VAR_KEYWORD
             for parameter in parameters
         )
 
-    def _precheck(self, script: VideoScript) -> list[ReviewFinding]:
+    def _precheck(
+        self,
+        script: VideoScript,
+        research: ResearchPackage,
+        authoritative_totals: dict[str, int],
+    ) -> list[ReviewFinding]:
         findings: list[ReviewFinding] = []
-        if not self._policy.min_words <= script.estimated_word_count <= self._policy.max_words:
+        word_count = authoritative_totals["spoken_word_count"]
+        duration = authoritative_totals["duration_seconds"]
+        if not self._policy.min_words <= word_count <= self._policy.max_words:
             findings.append(
                 self._finding(
                     "duration",
                     "critical",
                     None,
                     "Script word count is outside the production range.",
-                    str(script.estimated_word_count),
+                    str(word_count),
                     "Revise narration to "
                     f"{self._policy.min_words}-{self._policy.max_words} spoken words.",
                 )
             )
-        if (
-            not self._policy.min_duration_seconds
-            <= script.total_estimated_duration_seconds
-            <= self._policy.max_duration_seconds
-        ):
+        if not self._policy.min_duration_seconds <= duration <= self._policy.max_duration_seconds:
             findings.append(
                 self._finding(
                     "duration",
                     "warning",
                     None,
                     "Calculated duration is outside the channel target.",
-                    str(script.total_estimated_duration_seconds),
+                    str(duration),
                     "Adjust narration pacing or length.",
                 )
             )
@@ -184,6 +225,33 @@ class ScriptReviewService:
                         "Add a research reference or mark the section for editorial verification.",
                     )
                 )
+            invalid_references = [
+                reference
+                for reference in section.source_references
+                if reference not in research.references
+            ]
+            for reference in invalid_references:
+                findings.append(
+                    self._finding(
+                        "sourcing",
+                        "critical",
+                        section.section_id,
+                        "Section source is not an exact research-package reference.",
+                        reference,
+                        "Use an exact reference from the validated research package.",
+                    )
+                )
+            if section.verification_required and not section.source_references:
+                findings.append(
+                    self._finding(
+                        "sourcing",
+                        "critical",
+                        section.section_id,
+                        "Section has unresolved required verification.",
+                        section.narration,
+                        "Resolve the factual claim against an exact research reference.",
+                    )
+                )
         for sentence in self._duplicate_sentences(script):
             findings.append(
                 self._finding(
@@ -196,6 +264,45 @@ class ScriptReviewService:
                 )
             )
         return findings
+
+    def _authoritative_totals(self, script: VideoScript) -> dict[str, int]:
+        return {
+            "spoken_word_count": script.calculate_word_count(
+                include_disclaimer=self._policy.include_disclaimer_in_spoken_count
+            ),
+            "duration_seconds": script.calculate_duration_seconds(
+                words_per_minute=DEFAULT_SCRIPT_WORDS_PER_MINUTE,
+                include_disclaimer=self._policy.include_disclaimer_in_spoken_count,
+            ),
+            "min_words": self._policy.min_words,
+            "max_words": self._policy.max_words,
+            "min_duration_seconds": self._policy.min_duration_seconds,
+            "max_duration_seconds": self._policy.max_duration_seconds,
+        }
+
+    def _remove_inconsistent_length_findings(
+        self, editorial: ScriptReview, totals: dict[str, int]
+    ) -> ScriptReview:
+        within_policy = (
+            self._policy.min_words <= totals["spoken_word_count"] <= self._policy.max_words
+            and self._policy.min_duration_seconds
+            <= totals["duration_seconds"]
+            <= self._policy.max_duration_seconds
+        )
+        if not within_policy:
+            return editorial
+        removed_changes = {
+            finding.recommended_change
+            for finding in editorial.findings
+            if finding.category == "duration"
+        }
+        findings = [finding for finding in editorial.findings if finding.category != "duration"]
+        required_changes = [
+            change for change in editorial.required_changes if change not in removed_changes
+        ]
+        return editorial.model_copy(
+            update={"findings": findings, "required_changes": required_changes}
+        )
 
     @staticmethod
     def _duplicate_sentences(script: VideoScript) -> set[str]:
@@ -258,20 +365,36 @@ class ScriptReviewService:
         ]
         overall = round(sum(component_scores) / len(component_scores), 2)
         scores = editorial.scores.model_copy(update={"overall_score": overall})
-        critical = any(finding.severity == "critical" for finding in findings)
-        required = list(
+        blocking = [finding for finding in findings if self._is_blocking(finding)]
+        non_blocking = [finding for finding in findings if finding not in blocking]
+        blocking_changes = list(dict.fromkeys(finding.recommended_change for finding in blocking))
+        editorial_suggestions = list(
             dict.fromkeys(
                 [
+                    *editorial.optional_improvements,
                     *editorial.required_changes,
-                    *[
-                        finding.recommended_change
-                        for finding in findings
-                        if finding.severity in {"critical", "warning"}
-                    ],
+                    *[finding.recommended_change for finding in non_blocking],
                 ]
             )
         )
-        approved = not critical and overall >= 8.0
+        if self._uses_explicit_policy:
+            required = blocking_changes
+            approved = not blocking
+        else:
+            critical = any(finding.severity == "critical" for finding in findings)
+            required = list(
+                dict.fromkeys(
+                    [
+                        *editorial.required_changes,
+                        *[
+                            finding.recommended_change
+                            for finding in findings
+                            if finding.severity in {"critical", "warning"}
+                        ],
+                    ]
+                )
+            )
+            approved = not critical and overall >= 8.0
         if not approved and not required:
             required = ["Address the review findings before approval."]
         return ScriptReview(
@@ -282,9 +405,22 @@ class ScriptReviewService:
             revision_summary=editorial.revision_summary,
             required_changes=required,
             optional_improvements=editorial.optional_improvements,
+            blocking_findings=[finding.message for finding in blocking],
+            editorial_suggestions=editorial_suggestions,
+            deterministic_gate_applied=self._uses_explicit_policy,
             reviewed_at=timestamp,
             reviewer_version=editorial.reviewer_version,
         )
+
+    @staticmethod
+    def _is_blocking(finding: ReviewFinding) -> bool:
+        if finding.category == "duration":
+            return True
+        return finding.severity == "critical" and finding.category in {
+            "accuracy",
+            "sourcing",
+            "compliance",
+        }
 
     @staticmethod
     def _artifact_paths(directory: Path, title: str) -> tuple[Path, Path]:
@@ -323,6 +459,16 @@ class ScriptReviewService:
                 f"- Clarity: {scores.clarity_score}",
                 f"- Tone: {scores.tone_score}",
                 f"- Compliance: {scores.compliance_score}",
+            ]
+        )
+        lines.extend(
+            [
+                "",
+                "## Blocking Findings",
+                *[f"- {finding}" for finding in review.blocking_findings],
+                "",
+                "## Editorial Suggestions",
+                *[f"- {suggestion}" for suggestion in review.editorial_suggestions],
             ]
         )
         for heading, items in (

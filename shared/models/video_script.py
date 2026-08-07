@@ -2,7 +2,7 @@
 
 import re
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from shared.constants import (
     DEFAULT_SCRIPT_WORDS_PER_MINUTE,
@@ -46,6 +46,8 @@ class ScriptSection(BaseModel):
 class VideoScript(BaseModel):
     """Validated documentary-style script generated from a research package."""
 
+    model_config = ConfigDict(extra="forbid", revalidate_instances="never")
+
     title: str
     hook: str = Field(min_length=1)
     intro: str
@@ -74,24 +76,54 @@ class VideoScript(BaseModel):
         self.verification_notes = normalized.verification_notes
         return self
 
-    def narration_texts(self) -> list[str]:
-        """Return every field included in the spoken narration total."""
-        return [
+    def spoken_texts(self, *, include_disclaimer: bool = True) -> list[str]:
+        """Return the spoken fields selected by the active audio policy."""
+        texts = [
             self.hook,
             self.intro,
             *(section.narration for section in self.sections),
             self.conclusion,
             self.cta,
-            self.disclaimer,
         ]
+        if include_disclaimer:
+            texts.append(self.disclaimer)
+        return texts
+
+    def narration_texts(self) -> list[str]:
+        """Return the established default narration fields, including the disclaimer."""
+        return self.spoken_texts()
+
+    def calculate_word_count(self, *, include_disclaimer: bool = True) -> int:
+        """Calculate deterministic spoken words for the selected narration contract."""
+        return count_narration_words(self.spoken_texts(include_disclaimer=include_disclaimer))
+
+    def calculate_duration_seconds(
+        self,
+        *,
+        words_per_minute: int,
+        visual_pause_seconds: int = 0,
+        include_disclaimer: bool = True,
+    ) -> int:
+        """Calculate deterministic duration for the selected narration contract."""
+        return calculate_narration_duration_seconds(
+            self.calculate_word_count(include_disclaimer=include_disclaimer),
+            words_per_minute,
+            visual_pause_seconds,
+        )
 
     def with_derived_metrics(
-        self, *, words_per_minute: int, visual_pause_seconds: int = 0
+        self,
+        *,
+        words_per_minute: int,
+        visual_pause_seconds: int = 0,
+        include_disclaimer: bool = True,
     ) -> "VideoScript":
         """Return a copy with derived word count, duration, and mismatch note."""
-        word_count = count_narration_words(self.narration_texts())
-        duration = calculate_narration_duration_seconds(
-            word_count, words_per_minute, visual_pause_seconds
+        word_count = self.calculate_word_count(include_disclaimer=include_disclaimer)
+        duration = self.calculate_duration_seconds(
+            words_per_minute=words_per_minute,
+            visual_pause_seconds=visual_pause_seconds,
+            include_disclaimer=include_disclaimer,
         )
         notes = [
             note

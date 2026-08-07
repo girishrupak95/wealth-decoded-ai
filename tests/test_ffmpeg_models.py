@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from shared.models.ffmpeg import FFmpegInput, FFmpegInputType, FFmpegStreamMap
+from shared.models.ffmpeg import FFmpegInput, FFmpegInputType, FFmpegRenderPlan, FFmpegStreamMap
 
 
 def test_file_and_lavfi_inputs_are_exclusive_and_safe() -> None:
@@ -28,3 +28,22 @@ def test_stream_map_rejects_unsupported_types() -> None:
     assert FFmpegStreamMap(stream_label="vfinal", output_stream_type="video").optional is False
     with pytest.raises(ValidationError, match="output type"):
         FFmpegStreamMap(stream_label="vfinal", output_stream_type="data")
+
+
+def test_render_plan_still_rejects_deliberately_unsafe_summary(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="summary contains unsafe details"):
+        FFmpegRenderPlan(
+            job_id="unsafe-summary",
+            executable="ffmpeg",
+            global_args=[],
+            inputs=[],
+            filter_nodes=[],
+            stream_maps=[],
+            encoding_args=[],
+            output_path=tmp_path / "output.mp4",
+            expected_duration_seconds=1,
+            temporary_directory=tmp_path / "temporary",
+            command_arguments=["ffmpeg", str(tmp_path / "output.mp4")],
+            command_summary=["/private/unsafe/output.mp4"],
+            plan_version="1",
+        )

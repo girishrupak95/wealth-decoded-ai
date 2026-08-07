@@ -191,7 +191,8 @@ def make_agent(tmp_path: Path, response: str) -> tuple[StoryboardAgent, MockLLMC
         "Script: $video_script\n"
         "Review: $script_review\n"
         "Duration: $expected_duration_seconds\n"
-        "Sections: $valid_script_section_ids",
+        "Sections: $valid_script_section_ids\n"
+        "$active_renderable_asset_types",
         encoding="utf-8",
     )
     knowledge_root = tmp_path / "knowledge"
@@ -244,6 +245,31 @@ async def test_rejected_review_prevents_llm_call(tmp_path: Path) -> None:
         await agent.generate(make_concept(), make_script(), make_review(approved=False))
 
     assert client.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_restricted_visual_types_are_mandatory_prompt_context(tmp_path: Path) -> None:
+    payload = storyboard_payload(
+        visual_asset_type=VisualAssetType.TYPOGRAPHY,
+        on_screen_text=["Build your buffer"],
+    )
+    agent, client = make_agent(tmp_path, json.dumps(payload))
+
+    await agent.generate(
+        make_concept(),
+        make_script(),
+        make_review(),
+        {VisualAssetType.AI_IMAGE, VisualAssetType.TYPOGRAPHY},
+        4,
+    )
+
+    assert client.request is not None
+    assert "ACTIVE RENDERABLE ASSET TYPES" in client.request.template
+    assert "- ai_image" in client.request.template
+    assert "- typography" in client.request.template
+    assert "Do not output any other visual_asset_type" in client.request.template
+    assert "cannot resolve stock searches" in client.request.template
+    assert "Use at most 4 ai_image scenes" in client.request.template
 
 
 def test_agent_dependencies_are_injected(tmp_path: Path) -> None:

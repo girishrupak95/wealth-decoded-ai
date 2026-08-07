@@ -116,5 +116,7 @@ async def test_concept_agent_short_policy_aligns_prompt_and_duration(tmp_path: P
     assert concept.estimated_duration_minutes == 1
     assert client.request is not None
     assert "production_fixture_short" in client.request.template
+    assert "75-82 spoken words" in client.request.template
+    assert "target approximately 79" in client.request.template
     assert "30-45 second short-form video" in client.request.template
     assert "Do not design an 8-minute explainer." in client.request.template
