@@ -39,6 +39,10 @@ from shared.visual.character_reference_selector import (
     CharacterReferenceSelector,
 )
 from shared.visual.composition_planner import CompositionPlanner
+from shared.visual.financial_graphics_renderer import (
+    FinancialGraphicsRenderer,
+    FinancialGraphicsRenderError,
+)
 from shared.visual.illustration_prompt import (
     IllustrationPromptBuilder,
     IllustrationPromptContext,
@@ -67,6 +71,7 @@ class VisualAssetGenerationService:
         illustration_prompt_builder: IllustrationPromptBuilder | None = None,
         composition_planner: CompositionPlanner | None = None,
         character_reference_selector: CharacterReferenceSelector | None = None,
+        financial_graphics_renderer: FinancialGraphicsRenderer | None = None,
     ) -> None:
         self._image_provider, self._typography_renderer, self._video_provider = (
             image_provider,
@@ -84,6 +89,9 @@ class VisualAssetGenerationService:
         self._illustration_prompt_builder = illustration_prompt_builder
         self._composition_planner = composition_planner
         self._character_reference_selector = character_reference_selector
+        self._financial_graphics_renderer = (
+            financial_graphics_renderer or FinancialGraphicsRenderer()
+        )
 
     async def generate(self, review: ScriptReview, storyboard: Storyboard) -> VisualAssetResult:
         assets: list[GeneratedAsset] = []
@@ -230,19 +238,45 @@ class VisualAssetGenerationService:
         return False
 
     async def _asset(self, scene: StoryboardScene, warnings: list[str]) -> GeneratedAsset:
+        if scene.visual_asset_type == VisualAssetType.CHART:
+            if scene.chart_spec is None:
+                raise FinancialGraphicsRenderError(
+                    "Chart scene requires a valid ChartSpec for deterministic rendering."
+                )
+            chart_rendered = self._financial_graphics_renderer.render(scene.chart_spec)
+            return self._base(
+                scene,
+                VisualAssetKind.CHART,
+                VisualAssetStatus.GENERATED,
+                remote_reference=f"memory://{scene.scene_id}",
+                width=chart_rendered.width,
+                height=chart_rendered.height,
+                mime_type=chart_rendered.mime_type,
+                content=chart_rendered.content,
+                metadata={
+                    "generation_mode": "deterministic_chart",
+                    "chart_type": chart_rendered.chart_type.value,
+                    "chart_spec_version": scene.chart_spec.spec_version,
+                    "chart_render_version": chart_rendered.artifact.render_version,
+                    "data_origin": scene.chart_spec.data_origin.value,
+                    "source_references": list(scene.chart_spec.source_references),
+                    "verification_required": scene.chart_spec.verification_required,
+                    "renderer_metadata": chart_rendered.artifact.metadata,
+                },
+            )
         if scene.visual_asset_type == VisualAssetType.TYPOGRAPHY:
             if not scene.on_screen_text:
                 raise RuntimeError("Typography scene has no on-screen text")
-            rendered = self._typography_renderer.render(scene.on_screen_text[0])
+            typography_rendered = self._typography_renderer.render(scene.on_screen_text[0])
             return self._base(
                 scene,
                 VisualAssetKind.TYPOGRAPHY,
                 VisualAssetStatus.GENERATED,
                 remote_reference=f"memory://{scene.scene_id}",
-                width=rendered.width,
-                height=rendered.height,
-                mime_type=rendered.mime_type,
-                content=rendered.content,
+                width=typography_rendered.width,
+                height=typography_rendered.height,
+                mime_type=typography_rendered.mime_type,
+                content=typography_rendered.content,
             )
         if scene.visual_asset_type == VisualAssetType.AI_IMAGE:
             if scene.illustration_spec is not None:
@@ -324,7 +358,6 @@ class VisualAssetGenerationService:
                 VisualAssetKind.STOCK_SEARCH,
                 VisualAssetStatus.SEARCH_REQUIRED,
             ),
-            VisualAssetType.CHART: (VisualAssetKind.CHART, VisualAssetStatus.INSTRUCTION_ONLY),
             VisualAssetType.MOTION_GRAPHIC: (
                 VisualAssetKind.MOTION_GRAPHIC,
                 VisualAssetStatus.INSTRUCTION_ONLY,

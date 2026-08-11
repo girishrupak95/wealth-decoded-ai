@@ -416,7 +416,10 @@ async def test_typography_and_chart_mappings_preserve_contracts() -> None:
     )
     typography, chart = result.manifest.assets
     assert typography.status == VisualAssetStatus.GENERATED and typography.content == b"png"
-    assert chart.status == VisualAssetStatus.INSTRUCTION_ONLY
+    assert chart.status == VisualAssetStatus.GENERATED
+    assert chart.asset_kind == VisualAssetKind.CHART
+    assert chart.content is not None and chart.content.startswith(b"\x89PNG")
+    assert chart.metadata["generation_mode"] == "deterministic_chart"
     assert chart.metadata["source_references"] == []
     assert "Chart verification required." in result.manifest.warnings
     assert "Chart source reference missing." in result.manifest.warnings

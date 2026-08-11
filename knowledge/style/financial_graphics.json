@@ -19,6 +19,14 @@
     "Use muted green and red only for positive and negative financial meaning.",
     "Prefer minimal grid lines and an illustrated-book editorial character."
   ],
+  "semantic_palette": {
+    "background": "#F5F0E6",
+    "primary": "#0B1020",
+    "secondary": "#B8C2D6",
+    "accent": "#FFD54A",
+    "positive": "#5F8F72",
+    "negative": "#B85C5C"
+  },
   "data_rules": [
     "Percentage values are percentage points: 15.0 means 15%.",
     "Exact text and numbers are allowed because deterministic graphics own their data.",

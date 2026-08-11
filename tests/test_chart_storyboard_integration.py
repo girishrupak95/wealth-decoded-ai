@@ -368,7 +368,7 @@ def approved_review() -> ScriptReview:
 
 
 @pytest.mark.asyncio
-async def test_chart_production_guard_is_instruction_only_and_calls_no_renderer() -> None:
+async def test_chart_production_guard_is_local_png_and_calls_no_provider_or_typography() -> None:
     typography = Mock()
     service = VisualAssetGenerationService(NoCallImageProvider(), typography, live_generation=True)
 
@@ -376,7 +376,9 @@ async def test_chart_production_guard_is_instruction_only_and_calls_no_renderer(
 
     asset = result.manifest.assets[0]
     assert asset.asset_kind == VisualAssetKind.CHART
-    assert asset.status == VisualAssetStatus.INSTRUCTION_ONLY
+    assert asset.status == VisualAssetStatus.GENERATED
+    assert asset.content is not None and asset.content.startswith(b"\x89PNG")
+    assert asset.metadata["generation_mode"] == "deterministic_chart"
     typography.render.assert_not_called()
 
 
