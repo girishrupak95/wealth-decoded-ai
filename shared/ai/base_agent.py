@@ -1,7 +1,6 @@
 """Reusable async execution lifecycle for agents."""
 
 import json
-import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from string import Template
@@ -16,6 +15,7 @@ from shared.ai.knowledge_loader import KnowledgeLoader
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
+from shared.configuration import debug_raw_llm_enabled
 from shared.constants import (
     DEBUG_DIRECTORY_NAME,
     GENERATED_DIRECTORY_NAME,
@@ -62,6 +62,11 @@ class BaseAgent(ABC):
     def output_schema(self) -> type[BaseModel]:
         """Return the model response schema."""
 
+    @property
+    def max_output_tokens(self) -> int | None:
+        """Return an optional agent-specific output ceiling."""
+        return None
+
     async def execute(self, request: AgentRequest) -> AgentExecution:
         started_at = perf_counter()
         execution_id = str(uuid4())
@@ -92,8 +97,10 @@ class BaseAgent(ABC):
                     system_template=system_prompt,
                     context=request.context,
                     knowledge=knowledge,
+                    max_output_tokens=self.max_output_tokens,
                 )
             )
+            raw_output_character_count = len(raw_output)
             self._save_debug_raw_output(raw_output, event_logger)
             output = self._output_validator.validate(raw_output, self.output_schema)
         except OutputValidationError as error:
@@ -113,7 +120,12 @@ class BaseAgent(ABC):
             )
             raise
         duration = round((perf_counter() - started_at) * 1000, 3)
-        event_logger.info("agent_execution_finished", duration=duration, status="succeeded")
+        event_logger.info(
+            "agent_execution_finished",
+            duration=duration,
+            status="succeeded",
+            raw_output_character_count=raw_output_character_count,
+        )
         return AgentExecution(output=output, execution_id=execution_id, duration_ms=duration)
 
     def _build_output_schema_instruction(self) -> str:
@@ -128,7 +140,7 @@ class BaseAgent(ABC):
         )
 
     def _save_debug_raw_output(self, raw_output: str, event_logger: Any) -> None:
-        if os.environ.get("WEALTH_DEBUG_SAVE_RAW_LLM") != "1":
+        if not debug_raw_llm_enabled():
             return
         try:
             path = self._debug_output_path()

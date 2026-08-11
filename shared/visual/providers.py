@@ -4,6 +4,12 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field, field_validator
 
+from shared.models.image_generation import ImageReferenceCapability, ImageReferenceInput
+
+
+class ImageReferenceCapabilityError(RuntimeError):
+    """Raised when reference conditioning is requested from an unsupported provider."""
+
 
 class GeneratedVideoReference(BaseModel):
     """A provider-confirmed reference to a generated video asset."""
@@ -25,6 +31,11 @@ class GeneratedVideoReference(BaseModel):
 
 
 class ImageGenerationProvider(ABC):
+    @property
+    def reference_capability(self) -> ImageReferenceCapability:
+        """Report optional reference support without changing text-only generation."""
+        return ImageReferenceCapability.UNSUPPORTED
+
     @abstractmethod
     async def generate_image(
         self,
@@ -35,6 +46,22 @@ class ImageGenerationProvider(ABC):
         output_format: str,
         metadata: dict[str, object],
     ) -> bytes: ...
+
+    async def generate_image_with_references(
+        self,
+        prompt: str,
+        *,
+        references: list[ImageReferenceInput],
+        width: int,
+        height: int,
+        output_format: str,
+        metadata: dict[str, object],
+    ) -> bytes:
+        del prompt, references, width, height, output_format, metadata
+        raise ImageReferenceCapabilityError(
+            "Image provider does not support reference-conditioned generation."
+        )
+
     @abstractmethod
     async def health(self) -> bool: ...
     @abstractmethod

@@ -1,0 +1,112 @@
+{
+  "catalog_version": "1.0",
+  "characters": [
+    {
+      "character_id": "GUIDE_01",
+      "display_name": "The Guide",
+      "role": "guide",
+      "visual_identity": "An approachable adult financial educator in the 40s age range, with a balanced upright silhouette, short softly waved hair, an oval face, and thin rectangular eyewear.",
+      "wardrobe": [
+        "simple navy smart-casual jacket",
+        "light open-collar shirt",
+        "clean straight-leg trousers"
+      ],
+      "signature_features": [
+        "thin rectangular eyewear",
+        "small gold notebook",
+        "calm upright posture"
+      ],
+      "default_expression": "Calm, composed, and approachable.",
+      "palette_emphasis": [
+        "primary ink",
+        "selective gold"
+      ],
+      "prohibited_changes": [
+        "do not remove the rectangular eyewear",
+        "do not replace the short softly waved hairstyle",
+        "do not replace the small gold notebook"
+      ]
+    },
+    {
+      "character_id": "SAVER_01",
+      "display_name": "The Saver",
+      "role": "saver",
+      "visual_identity": "A practical relatable adult in the 30s age range, with a compact readable silhouette, chin-length straight hair tucked behind the ears, a softly angular face, and no eyewear.",
+      "wardrobe": [
+        "simple muted crew-neck sweater",
+        "everyday straight-leg trousers",
+        "practical low-profile shoes"
+      ],
+      "signature_features": [
+        "chin-length tucked hairstyle",
+        "slim paper budget folder",
+        "grounded relaxed posture"
+      ],
+      "default_expression": "Attentive, practical, and quietly optimistic.",
+      "palette_emphasis": [
+        "primary ink",
+        "muted secondary",
+        "selective positive"
+      ],
+      "prohibited_changes": [
+        "do not lengthen the hairstyle beyond the chin",
+        "do not add eyewear",
+        "do not replace the slim budget folder"
+      ]
+    },
+    {
+      "character_id": "INVESTOR_01",
+      "display_name": "The Investor",
+      "role": "investor",
+      "visual_identity": "A thoughtful adult in the late-30s to 40s age range, with a lean composed silhouette, close-cropped textured hair, a long rounded face, and subtle round eyewear.",
+      "wardrobe": [
+        "restrained smart-casual overshirt",
+        "plain knit top",
+        "dark tailored trousers"
+      ],
+      "signature_features": [
+        "subtle round eyewear",
+        "narrow analog wristwatch",
+        "measured slightly forward posture"
+      ],
+      "default_expression": "Thoughtful and analytical without appearing severe.",
+      "palette_emphasis": [
+        "primary ink",
+        "muted secondary",
+        "selective gold"
+      ],
+      "prohibited_changes": [
+        "do not remove the round eyewear",
+        "do not replace the close-cropped hairstyle",
+        "do not replace the narrow analog wristwatch"
+      ]
+    },
+    {
+      "character_id": "ENTREPRENEUR_01",
+      "display_name": "The Entrepreneur",
+      "role": "entrepreneur",
+      "visual_identity": "A focused adult small-business professional in the 30s to early-40s age range, with a sturdy simple silhouette, medium-length loosely tied hair, a broad softly rounded face, and no eyewear.",
+      "wardrobe": [
+        "practical rolled-sleeve work shirt",
+        "simple dark apron",
+        "comfortable contemporary trousers"
+      ],
+      "signature_features": [
+        "loosely tied hairstyle",
+        "small paper order ledger",
+        "steady practical posture"
+      ],
+      "default_expression": "Focused, resourceful, and composed under uncertainty.",
+      "palette_emphasis": [
+        "primary ink",
+        "muted secondary",
+        "selective gold"
+      ],
+      "prohibited_changes": [
+        "do not replace the loosely tied hairstyle",
+        "do not remove the simple dark apron",
+        "do not replace the small paper order ledger"
+      ]
+    }
+  ]
+}

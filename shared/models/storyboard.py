@@ -11,6 +11,8 @@ from shared.constants import (
     DEFAULT_STORYBOARD_RESOLUTION,
 )
 from shared.models.base import BaseModel
+from shared.models.chart import ChartSpec
+from shared.models.illustration import IllustrationSpec
 
 
 class VisualAssetType(StrEnum):
@@ -66,6 +68,8 @@ class StoryboardScene(BaseModel):
     source_references: list[str]
     verification_required: bool
     production_notes: list[str]
+    illustration_spec: IllustrationSpec | None = None
+    chart_spec: ChartSpec | None = None
 
     @field_validator("narration_excerpt")
     @classmethod
@@ -97,10 +101,31 @@ class StoryboardScene(BaseModel):
             if not self.stock_search_terms:
                 raise ValueError("Stock asset types require at least one stock_search_term")
 
-        if self.visual_asset_type in {VisualAssetType.CHART, VisualAssetType.SCREENSHOT}:
+        if self.illustration_spec is not None and self.chart_spec is not None:
+            raise ValueError("A scene cannot contain both illustration_spec and chart_spec")
+
+        if self.visual_asset_type == VisualAssetType.CHART:
+            if self.chart_spec is None:
+                raise ValueError("Chart scenes require chart_spec")
+            if self.illustration_spec is not None:
+                raise ValueError("Chart scenes must not contain illustration_spec")
+            if self.generation_prompt is not None:
+                raise ValueError("Chart scenes must not contain generation_prompt")
+            if self.stock_search_terms:
+                raise ValueError("Chart scenes must not contain stock_search_terms")
+        elif self.chart_spec is not None:
+            raise ValueError("chart_spec is supported only for chart scenes")
+
+        if (
+            self.visual_asset_type == VisualAssetType.TYPOGRAPHY
+            and self.illustration_spec is not None
+        ):
+            raise ValueError("Typography scenes must not contain illustration_spec")
+
+        if self.visual_asset_type == VisualAssetType.SCREENSHOT:
             if not self.source_references and not self.verification_required:
                 raise ValueError(
-                    "Chart and screenshot scenes require source_references or verification_required"
+                    "Screenshot scenes require source_references or verification_required"
                 )
 
         return self

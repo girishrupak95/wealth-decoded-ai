@@ -1,12 +1,18 @@
 """Fully mocked contract tests for the OpenAI image provider."""
 
 import base64
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from _pytest.logging import LogCaptureFixture
 
+from shared.models.image_generation import (
+    ImageReferenceCapability,
+    ImageReferenceInput,
+    ImageReferencePurpose,
+)
 from shared.visual.image_provider import ImageProviderError, OpenAIImageGenerationProvider
 
 
@@ -18,7 +24,9 @@ class ApiError(Exception):
 
 def client(response: object) -> SimpleNamespace:
     return SimpleNamespace(
-        images=SimpleNamespace(generate=AsyncMock(return_value=response)),
+        images=SimpleNamespace(
+            generate=AsyncMock(return_value=response), edit=AsyncMock(return_value=response)
+        ),
         models=SimpleNamespace(list=AsyncMock(return_value=[])),
         close=AsyncMock(),
     )
@@ -144,3 +152,48 @@ async def test_provider_health_and_close() -> None:
     await provider.close()
 
     sdk.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_official_edit_api_receives_ordered_local_character_references(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "portrait.png"
+    second = tmp_path / "three-quarter.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    references = [
+        ImageReferenceInput(
+            asset_path=str(first),
+            purpose=ImageReferencePurpose.CHARACTER_IDENTITY,
+            priority=1,
+        ),
+        ImageReferenceInput(
+            asset_path=str(second),
+            purpose=ImageReferencePurpose.CHARACTER_IDENTITY,
+            priority=2,
+        ),
+    ]
+    sdk = client(response(b"conditioned"))
+    provider = OpenAIImageGenerationProvider(sdk, model="gpt-image-2", quality="low")
+
+    result = await provider.generate_image_with_references(
+        "identity prompt",
+        references=references,
+        width=1920,
+        height=1080,
+        output_format="png",
+        metadata={},
+    )
+
+    assert result == b"conditioned"
+    assert provider.reference_capability == ImageReferenceCapability.MULTIPLE_REFERENCES
+    assert sdk.images.edit.await_args.kwargs == {
+        "image": [first, second],
+        "model": "gpt-image-2",
+        "prompt": "identity prompt",
+        "size": "1536x1024",
+        "quality": "low",
+        "output_format": "png",
+    }
+    sdk.images.generate.assert_not_awaited()

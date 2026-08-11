@@ -1,0 +1,68 @@
+{
+  "created_at": "2026-08-09T16:40:58.613656Z",
+  "updated_at": "2026-08-10T12:35:01.586521Z",
+  "version": "1.0",
+  "metadata": {},
+  "registry_version": "1.1",
+  "references": [
+    {
+      "created_at": "2026-08-10T12:34:53.579518Z",
+      "updated_at": "2026-08-10T12:34:53.579519Z",
+      "version": "1.0",
+      "metadata": {},
+      "reference_id": "saver_01_portrait",
+      "character_id": "SAVER_01",
+      "reference_type": "portrait",
+      "authorities": [
+        "face_identity"
+      ],
+      "asset_path": "knowledge/style/character-references/saver_01/portrait.png",
+      "source_manifest_path": "generated/character-references/2026-08-09/saver_01/reference-candidates-3/manifest.json",
+      "source_reference_id": "saver_01_portrait",
+      "approved_at": null,
+      "promoted_at": "2026-08-10T12:34:53.577841Z",
+      "checksum_sha256": "f6514183a7665af2b719160ae22ebde66a04c7ac13e5b3e9f55fe93f507d2117",
+      "description": null
+    },
+    {
+      "created_at": "2026-08-10T12:35:01.587818Z",
+      "updated_at": "2026-08-10T12:35:01.587819Z",
+      "version": "1.0",
+      "metadata": {},
+      "reference_id": "saver_01_three_quarter",
+      "character_id": "SAVER_01",
+      "reference_type": "three_quarter",
+      "authorities": [
+        "face_identity",
+        "wardrobe_identity"
+      ],
+      "asset_path": "knowledge/style/character-references/saver_01/three-quarter.png",
+      "source_manifest_path": "generated/character-references/2026-08-09/saver_01/reference-candidates-3/manifest.json",
+      "source_reference_id": "saver_01_three_quarter",
+      "approved_at": null,
+      "promoted_at": "2026-08-10T12:35:01.586521Z",
+      "checksum_sha256": "55d850c2b6032671263f41f460eb3742c145d39474d1d7708622d82d97deb5ff",
+      "description": null
+    },
+    {
+      "created_at": "2026-08-10T12:34:12.058208Z",
+      "updated_at": "2026-08-10T12:34:12.058209Z",
+      "version": "1.0",
+      "metadata": {},
+      "reference_id": "saver_01_full_body",
+      "character_id": "SAVER_01",
+      "reference_type": "full_body",
+      "authorities": [
+        "wardrobe_identity",
+        "body_identity"
+      ],
+      "asset_path": "knowledge/style/character-references/saver_01/full-body.png",
+      "source_manifest_path": "generated/character-references/2026-08-09/saver_01/reference-candidates-3/manifest.json",
+      "source_reference_id": "saver_01_full_body",
+      "approved_at": null,
+      "promoted_at": "2026-08-10T12:34:12.056929Z",
+      "checksum_sha256": "73eebaf50aaf8fae58805a9b10f6144609b999ab7860a0104a24b564decae8c8",
+      "description": null
+    }
+  ]
+}

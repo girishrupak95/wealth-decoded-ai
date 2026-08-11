@@ -1,5 +1,6 @@
 """Deterministically map storyboard scenes to in-memory visual assets."""
 
+import re
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -16,6 +17,13 @@ from shared.constants import (
     VISUAL_ASSETS_FAILED_WARNING,
 )
 from shared.exceptions.ai import ScriptReviewNotApprovedError, VisualProviderUnavailableError
+from shared.models.illustration import IllustrationSceneType, IllustrationSpec
+from shared.models.image_generation import (
+    ImageReferenceCapability,
+    ImageReferenceInput,
+    ImageReferencePurpose,
+)
+from shared.models.reference_selection import ReferenceSelectionMode
 from shared.models.script_review import ScriptReview
 from shared.models.storyboard import Storyboard, StoryboardScene, VisualAssetType
 from shared.models.visual_assets import (
@@ -24,6 +32,17 @@ from shared.models.visual_assets import (
     VisualAssetManifest,
     VisualAssetResult,
     VisualAssetStatus,
+)
+from shared.visual.character_reference_selector import (
+    IDENTITY_REFERENCE_GUIDANCE,
+    SCENE_OBJECT_AUTHORITY_GUIDANCE,
+    CharacterReferenceSelector,
+)
+from shared.visual.composition_planner import CompositionPlanner
+from shared.visual.illustration_prompt import (
+    IllustrationPromptBuilder,
+    IllustrationPromptContext,
+    IllustrationPromptResult,
 )
 from shared.visual.providers import (
     GeneratedVideoReference,
@@ -45,6 +64,9 @@ class VisualAssetGenerationService:
         live_generation: bool = False,
         max_live_images: int = 5,
         fail_fast: bool = False,
+        illustration_prompt_builder: IllustrationPromptBuilder | None = None,
+        composition_planner: CompositionPlanner | None = None,
+        character_reference_selector: CharacterReferenceSelector | None = None,
     ) -> None:
         self._image_provider, self._typography_renderer, self._video_provider = (
             image_provider,
@@ -59,6 +81,9 @@ class VisualAssetGenerationService:
             fail_fast,
         )
         self._logger = logger.bind(component=self.__class__.__name__)
+        self._illustration_prompt_builder = illustration_prompt_builder
+        self._composition_planner = composition_planner
+        self._character_reference_selector = character_reference_selector
 
     async def generate(self, review: ScriptReview, storyboard: Storyboard) -> VisualAssetResult:
         assets: list[GeneratedAsset] = []
@@ -220,6 +245,8 @@ class VisualAssetGenerationService:
                 content=rendered.content,
             )
         if scene.visual_asset_type == VisualAssetType.AI_IMAGE:
+            if scene.illustration_spec is not None:
+                return await self._illustrated_image(scene, warnings)
             width, height = self._dimensions(scene)
             content = await self._image_provider.generate_image(
                 scene.generation_prompt or "",
@@ -322,6 +349,149 @@ class VisualAssetGenerationService:
             warnings=self._scene_warnings(scene),
         )
 
+    async def _illustrated_image(
+        self, scene: StoryboardScene, warnings: list[str]
+    ) -> GeneratedAsset:
+        spec = scene.illustration_spec
+        if spec is None:
+            raise ValueError("Illustrated image generation requires IllustrationSpec.")
+        if self._illustration_prompt_builder is None or self._composition_planner is None:
+            raise ValueError("Illustrated image generation dependencies are unavailable.")
+        if self._requires_deterministic_data(spec):
+            raise ValueError(
+                "Precise data scenes require deterministic financial graphics readiness."
+            )
+        composition = self._composition_planner.plan(spec)
+        prompt_result = self._illustration_prompt_builder.build(
+            spec,
+            scene_context=IllustrationPromptContext(
+                narration_excerpt=scene.narration_excerpt,
+            ),
+            composition_plan=composition,
+        )
+        prompt = self._illustrated_prompt(prompt_result)
+        selected_reference = None
+        selection = None
+        invalid_reference_excluded = False
+        canonical_metadata_available = False
+        if spec.character_ids and self._character_reference_selector is not None:
+            framing = self._character_reference_selector.framing_for_spec(spec)
+            for character_id in spec.character_ids:
+                prepared = self._character_reference_selector.prepare(
+                    character_id, validate_assets=True
+                )
+                warnings.extend(prepared.warnings)
+                invalid_reference_excluded = (
+                    invalid_reference_excluded or prepared.invalid_reference_excluded
+                )
+                canonical_metadata_available = (
+                    canonical_metadata_available or prepared.canonical_metadata_available
+                )
+                candidate_selection, selected = self._character_reference_selector.select(
+                    character_id,
+                    framing,
+                    prepared.references,
+                    ReferenceSelectionMode.SINGLE_BEST,
+                )
+                if selected:
+                    selection = candidate_selection
+                    selected_reference = selected[0]
+                    break
+        reference_conditioning = "not_applicable"
+        width, height = self._dimensions(scene)
+        if selected_reference is not None:
+            if self._image_provider.reference_capability == ImageReferenceCapability.UNSUPPORTED:
+                reference_conditioning = "provider_unsupported"
+                content = await self._image_provider.generate_image(
+                    prompt,
+                    width=width,
+                    height=height,
+                    output_format="png",
+                    metadata={},
+                )
+            else:
+                reference_conditioning = (
+                    "invalid_fallback" if invalid_reference_excluded else "used"
+                )
+                prompt = f"{prompt}\n\nIdentity-reference guidance: {IDENTITY_REFERENCE_GUIDANCE}"
+                content = await self._image_provider.generate_image_with_references(
+                    prompt,
+                    references=[
+                        ImageReferenceInput(
+                            asset_path=str(selected_reference.validated_asset_path),
+                            purpose=ImageReferencePurpose.CHARACTER_IDENTITY,
+                            priority=1,
+                        )
+                    ],
+                    width=width,
+                    height=height,
+                    output_format="png",
+                    metadata={},
+                )
+        else:
+            if spec.character_ids:
+                reference_conditioning = (
+                    "invalid_fallback" if invalid_reference_excluded else "unavailable"
+                )
+            content = await self._image_provider.generate_image(
+                prompt,
+                width=width,
+                height=height,
+                output_format="png",
+                metadata={},
+            )
+        if not content:
+            raise RuntimeError("Image provider returned empty content")
+        reference = selected_reference.reference if selected_reference is not None else None
+        return self._base(
+            scene,
+            VisualAssetKind.IMAGE,
+            VisualAssetStatus.GENERATED,
+            provider=self._image_provider.__class__.__name__,
+            prompt=prompt,
+            remote_reference=f"memory://{scene.scene_id}",
+            width=width,
+            height=height,
+            mime_type="image/png",
+            content=content,
+            metadata={
+                "requested_width": width,
+                "requested_height": height,
+                "actual_width": width,
+                "actual_height": height,
+                "generation_mode": "illustrated",
+                "illustration_spec_version": spec.spec_version,
+                "composition_plan_version": composition.plan_version,
+                "composition_template": composition.template_name,
+                "composition_camera": composition.camera.value,
+                "style_profile_version": prompt_result.style_profile_version,
+                "character_ids": list(spec.character_ids),
+                "reference_conditioning": reference_conditioning,
+                "selected_reference_id": reference.reference_id if reference else None,
+                "selected_reference_checksum": (reference.checksum_sha256 if reference else None),
+                "reference_fallback_used": selection.fallback_used if selection else False,
+                "canonical_metadata_available": canonical_metadata_available,
+            },
+        )
+
+    @staticmethod
+    def _illustrated_prompt(result: IllustrationPromptResult) -> str:
+        lines = [result.prompt, SCENE_OBJECT_AUTHORITY_GUIDANCE]
+        if result.negative_prompt:
+            lines.extend(["Negative constraints:", result.negative_prompt])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _requires_deterministic_data(spec: IllustrationSpec) -> bool:
+        if spec.scene_type != IllustrationSceneType.DATA:
+            return False
+        values = [
+            spec.description,
+            *(spec.key_objects),
+            spec.visual_metaphor or "",
+        ]
+        return any(re.search(r"\d", value) for value in values)
+
     @staticmethod
     def _scene_duration(scene: StoryboardScene) -> int:
         duration = scene.end_time_seconds - scene.start_time_seconds
@@ -342,7 +512,7 @@ class VisualAssetGenerationService:
             scene,
             VisualAssetKind.IMAGE,
             VisualAssetStatus.PENDING,
-            prompt=scene.generation_prompt,
+            prompt=(scene.generation_prompt if scene.illustration_spec is None else None),
             instruction=scene.visual_description,
             metadata={
                 "requested_width": width,
@@ -361,7 +531,12 @@ class VisualAssetGenerationService:
             kind,
             VisualAssetStatus.FAILED,
             provider=self._provider_name(scene),
-            prompt=scene.generation_prompt,
+            prompt=(
+                scene.generation_prompt
+                if scene.illustration_spec is None
+                or scene.visual_asset_type != VisualAssetType.AI_IMAGE
+                else None
+            ),
             instruction=scene.visual_description,
             error_message=self._safe_error_message(scene, error),
         )
@@ -445,6 +620,12 @@ class VisualAssetGenerationService:
             "on_screen_text": list(scene.on_screen_text),
             "sound_effects": list(scene.sound_effects),
             "music_direction": scene.music_direction,
+            "generation_mode": (
+                "illustrated"
+                if scene.visual_asset_type == VisualAssetType.AI_IMAGE
+                and scene.illustration_spec is not None
+                else "legacy"
+            ),
         }
 
     @staticmethod

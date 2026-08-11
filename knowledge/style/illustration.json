@@ -1,0 +1,223 @@
+{
+  "profile_version": "1.0",
+  "profile_name": "Wealth Decoded Editorial Illustration",
+  "direction": "A premium illustrated financial book coming to life.",
+  "style_character": {
+    "attributes": [
+      "hand-drawn editorial illustration",
+      "pencil and ink aesthetic",
+      "sophisticated financial graphic essay",
+      "mature",
+      "intelligent",
+      "calm",
+      "trustworthy",
+      "minimal",
+      "premium",
+      "educational",
+      "lightly imperfect handmade linework",
+      "clear visual hierarchy",
+      "selective color"
+    ],
+    "intended_impression": "A premium illustrated financial book coming to life.",
+    "avoid_impressions": [
+      "children's cartoon",
+      "corporate vector art",
+      "cheap whiteboard animation",
+      "emoji explainer",
+      "photorealistic AI photography",
+      "generic AI art",
+      "comic parody",
+      "copied artwork from another channel"
+    ]
+  },
+  "palette": {
+    "paper_background": {
+      "hex": "#F5F0E6",
+      "description": "Warm off-white light cream paper."
+    },
+    "primary_ink": {
+      "hex": "#0B1020",
+      "description": "Deep navy drawing and primary text ink."
+    },
+    "accent": {
+      "hex": "#FFD54A",
+      "description": "Wealth Decoded gold for selective viewer attention."
+    },
+    "secondary": {
+      "hex": "#B8C2D6",
+      "description": "Cool gray for supporting information."
+    },
+    "positive": {
+      "hex": "#5F8F72",
+      "description": "Conservative muted green for positive financial meaning."
+    },
+    "danger": {
+      "hex": "#B85C5C",
+      "description": "Conservative muted red for debt, loss, or risk."
+    },
+    "usage_rules": [
+      "Primary navy ink dominates drawing and hierarchy.",
+      "The paper background dominates negative space.",
+      "Gold is selective and marks the concept carrying viewer attention.",
+      "Green and red are semantic exceptions rather than decorative colors.",
+      "Avoid rainbow palettes.",
+      "Avoid excessive saturation."
+    ]
+  },
+  "drawing_language": {
+    "linework": {
+      "preferred": [
+        "pencil",
+        "ink",
+        "editorial sketch",
+        "slightly organic lines",
+        "controlled imperfections"
+      ],
+      "avoid": [
+        "thick cartoon outlines",
+        "glossy vector edges",
+        "3D-rendered appearance"
+      ]
+    },
+    "shading": {
+      "preferred": [
+        "sparse pencil shading",
+        "hatching where appropriate",
+        "restrained shadows"
+      ],
+      "avoid": [
+        "photorealistic lighting",
+        "glossy gradients",
+        "heavy airbrushing"
+      ]
+    },
+    "detail_level": [
+      "Use enough detail to communicate the idea immediately.",
+      "Keep environments simplified.",
+      "Make financial objects recognizable.",
+      "Prioritize visual hierarchy over decoration."
+    ]
+  },
+  "character_language": {
+    "rules": [
+      "Use adult proportions and mature editorial illustration.",
+      "Keep faces expressive but restrained.",
+      "Use simple readable silhouettes.",
+      "Use contemporary professional clothing where appropriate.",
+      "Keep appearance culturally flexible."
+    ],
+    "avoid": [
+      "caricature",
+      "exaggerated cartoon anatomy",
+      "celebrity resemblance",
+      "copyrighted character resemblance"
+    ]
+  },
+  "financial_object_language": {
+    "examples": [
+      "wallet",
+      "cash",
+      "cards",
+      "bank",
+      "loan",
+      "house",
+      "car",
+      "phone",
+      "portfolio",
+      "stock chart",
+      "investment jar",
+      "tax document",
+      "salary or paycheck",
+      "subscription",
+      "bill"
+    ],
+    "rules": [
+      "Keep objects visually simplified and instantly recognizable.",
+      "Do not overload objects with tiny text.",
+      "Use labels only when necessary.",
+      "Use gold selectively for the object carrying narrative emphasis."
+    ]
+  },
+  "visual_metaphor_language": {
+    "rules": [
+      "Prefer one clear metaphor over several weak symbols.",
+      "Use metaphors that communicate the financial mechanism visually.",
+      "Avoid literal text when the illustration can carry the idea.",
+      "Make the metaphor understandable within approximately one second.",
+      "Preserve financial accuracy.",
+      "Avoid dramatic imagery that overstates the underlying claim."
+    ]
+  },
+  "composition": {
+    "rules": [
+      "Use one primary focal subject and a clear reading order.",
+      "Keep backgrounds restrained and preserve generous negative space.",
+      "Give the important concept selective gold emphasis.",
+      "Keep compositions readable at YouTube and mobile size.",
+      "Avoid dense poster-like scenes.",
+      "Keep critical information away from frame edges.",
+      "Leave enough visual margin for future pan or zoom without losing important subjects."
+    ]
+  },
+  "text_policy": {
+    "allowed_uses": [
+      "one important number",
+      "short phrase",
+      "comparison",
+      "milestone",
+      "label",
+      "chapter or title",
+      "conclusion"
+    ],
+    "rules": [
+      "Avoid paragraphs.",
+      "Narration carries explanation.",
+      "Illustration carries story.",
+      "Text reinforces narration and illustration."
+    ]
+  },
+  "financial_accuracy": {
+    "rules": [
+      "Generated illustrations must not invent financial data.",
+      "Charts with numerical meaning must come from deterministic structured data systems.",
+      "Do not depict precise returns, rates, or percentages unless supplied by verified structured data.",
+      "Illustrative values must be clearly identified as editorial or illustrative.",
+      "Visual drama must not imply stronger certainty than the narration or research."
+    ]
+  },
+  "negative_constraints": [
+    "no children's-cartoon style",
+    "no corporate vector stock style",
+    "no photorealism",
+    "no glossy 3D",
+    "no anime",
+    "no emoji",
+    "no whiteboard-animation aesthetic",
+    "no illegible text",
+    "no fake logos",
+    "no real brand logos unless specifically required and permitted",
+    "no watermarks",
+    "no copied character designs",
+    "no copyrighted visual imitation",
+    "no excessive clutter",
+    "no rainbow color palette"
+  ],
+  "motion_language": {
+    "supported_intent": [
+      "slow push-in",
+      "calm pan",
+      "selective parallax",
+      "pencil reveal",
+      "highlight sweep",
+      "element entrance",
+      "path drawing",
+      "number count-up"
+    ],
+    "rules": [
+      "Motion supports comprehension.",
+      "Avoid constant motion.",
+      "Avoid aggressive zooming.",
+      "Prefer one dominant motion idea per beat."
+    ]
+  }
+}

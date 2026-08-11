@@ -6,14 +6,19 @@ from typing import Any
 
 import pytest
 
-from agents.storyboard_agent.agent import StoryboardAgent
+from agents.storyboard_agent.agent import (
+    STORYBOARD_MAX_OUTPUT_TOKENS,
+    StoryboardAgent,
+    StoryboardIllustrationValidationError,
+)
 from shared.ai.knowledge_loader import KnowledgeLoader
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
 from shared.exceptions.ai import OutputValidationError, ScriptReviewNotApprovedError
+from shared.models.illustration import IllustrationAnimationType, IllustrationPaletteEmphasis
 from shared.models.script_review import ReviewScores, ScriptReview
-from shared.models.storyboard import VisualAssetType
+from shared.models.storyboard import CameraDirection, VisualAssetType
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
 
@@ -197,6 +202,24 @@ def make_agent(tmp_path: Path, response: str) -> tuple[StoryboardAgent, MockLLMC
     )
     knowledge_root = tmp_path / "knowledge"
     knowledge_root.mkdir()
+    style_root = knowledge_root / "style"
+    style_root.mkdir()
+    (style_root / "characters.json").write_text(
+        json.dumps(
+            {
+                "catalog_version": "1.0",
+                "characters": [
+                    {
+                        "character_id": "SAVER_01",
+                        "display_name": "The Saver",
+                        "role": "saver",
+                        "visual_identity": "Canonical identity supplied downstream.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     client = MockLLMClient(response)
     agent = StoryboardAgent(
         llm_client=client,
@@ -222,6 +245,7 @@ async def test_approved_review_generates_validated_storyboard_and_prompt_context
     assert storyboard.title == concept.title
     assert client.calls == 1
     assert client.request is not None
+    assert client.request.max_output_tokens == STORYBOARD_MAX_OUTPUT_TOKENS == 8_000
     assert client.request.context["video_concept"]["title"] == concept.title
     assert client.request.context["video_script"]["title"] == script.title
     assert client.request.context["script_review"]["approved"] is True
@@ -282,6 +306,155 @@ def test_agent_dependencies_are_injected(tmp_path: Path) -> None:
     assert isinstance(agent._output_validator, OutputValidator)
 
 
+def test_system_prompt_defines_selective_safe_illustration_planning() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Do not force every scene to be illustrated" in prompt
+    assert "style/characters.json" in prompt
+    assert "preserve a recurring character across adjacent scenes" in prompt
+    assert "exact currency amounts, percentages, durations, axes, chart labels" in prompt
+    assert "never describe or invent character appearance" in prompt
+    assert "provider-neutral editorial intent" in prompt
+
+
+def test_system_prompt_enumerates_complete_structured_output_contract() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+    scene_fields = {
+        "scene_id",
+        "script_section_id",
+        "sequence_number",
+        "start_time_seconds",
+        "end_time_seconds",
+        "narration_excerpt",
+        "visual_asset_type",
+        "visual_description",
+        "generation_prompt",
+        "stock_search_terms",
+        "camera_direction",
+        "on_screen_text",
+        "transition_in",
+        "transition_out",
+        "sound_effects",
+        "music_direction",
+        "source_references",
+        "verification_required",
+        "production_notes",
+        "illustration_spec",
+    }
+    storyboard_fields = {
+        "title",
+        "visual_style",
+        "aspect_ratio",
+        "resolution",
+        "frame_rate",
+        "scenes",
+        "summary",
+        "production_warnings",
+        "generated_at",
+        "storyboard_version",
+    }
+    assert all(field in prompt for field in scene_fields | storyboard_fields)
+    assert '"stock_search_terms": []' in prompt
+    assert "ai_image and typography scenes, stock_search_terms is normally []" in prompt
+    assert "stock_image and stock_video require meaningful terms" in prompt
+    assert "typography may use null and must use illustration_spec: null" in prompt
+
+
+def test_system_prompt_lists_exact_illustration_enum_literals() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+    assert all(item.value in prompt for item in IllustrationPaletteEmphasis)
+    assert all(item.value in prompt for item in IllustrationAnimationType)
+    assert IllustrationPaletteEmphasis.MUTED.value == "muted"
+    assert IllustrationAnimationType.PUSH_IN.value == "push_in"
+
+
+def test_system_prompt_separates_camera_and_illustration_animation_enums() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+    camera_section = prompt.split("CAMERA DIRECTION ENUM", maxsplit=1)[1].split(
+        "ILLUSTRATION ANIMATION ENUM", maxsplit=1
+    )[0]
+    animation_section = prompt.split("ILLUSTRATION ANIMATION ENUM", maxsplit=1)[1].split(
+        "FINAL ENUM SELF-CHECK", maxsplit=1
+    )[0]
+
+    assert all(item.value in camera_section for item in CameraDirection)
+    assert all(item.value in animation_section for item in IllustrationAnimationType)
+    assert "slow_zoom_out" in camera_section
+    allowed_animation_values = animation_section.split("only:", maxsplit=1)[1].split(
+        ". CameraDirection", maxsplit=1
+    )[0]
+    assert "slow_zoom_out" not in allowed_animation_values
+    assert all(
+        value in allowed_animation_values for value in ("push_in", "pan", "parallax", "path_draw")
+    )
+    assert "different enums" in animation_section
+    assert "never copy camera-only values" in animation_section
+    assert {item.value for item in CameraDirection} == {
+        "static",
+        "slow_zoom_in",
+        "slow_zoom_out",
+        "pan_left",
+        "pan_right",
+        "tilt_up",
+        "tilt_down",
+        "dolly_in",
+        "dolly_out",
+        "handheld",
+        "aerial",
+        "none",
+    }
+    assert {item.value for item in IllustrationAnimationType} == {
+        "static",
+        "push_in",
+        "pan",
+        "parallax",
+        "pencil_reveal",
+        "highlight",
+        "element_entrance",
+        "path_draw",
+        "count_up",
+    }
+
+
+def test_system_prompt_declares_authoritative_character_id_consistency() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+    assert "IllustrationSpec.character_ids is the authoritative declaration" in prompt
+    assert '"character_ids": ["SAVER_01"]' in prompt
+    assert '"character_ids": []' in prompt
+    assert 'never "saver", "the saver", "SAVER", or "saver_01"' in prompt
+    assert "Do not rely only on generation_prompt" in prompt
+    assert "composition.focal_subject" in prompt
+    assert "repeat the same canonical ID" in prompt
+    assert "genuinely person-free" in prompt
+
+
+def test_system_prompt_requests_minimal_concise_output_without_framework_boilerplate() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+    assert "MINIMAL COMPLETE OUTPUT" in prompt
+    assert "Omit created_at, updated_at, version, and metadata" in prompt
+    assert "Keep required non-default fields" in prompt
+    assert "Storyboard.generated_at and storyboard_version" in prompt
+    assert "concise legacy compatibility summary" in prompt
+    assert "words maximum for generation_prompt" in prompt
+    assert "one concise sentence for visual_description" in prompt
+    assert "production_notes to" in prompt and "concise entries" in prompt
+    assert "key_objects to usually" in prompt and "comprehension-critical objects" in prompt
+    assert "downstream IllustrationPromptBuilder supplies authoritative global style" in prompt
+    assert "Never remove scene-specific financial, numerical, chart" in prompt
+
+
 @pytest.mark.asyncio
 async def test_invalid_llm_json_raises_output_validation_error(tmp_path: Path) -> None:
     """Malformed provider output uses the existing validation exception."""
@@ -298,6 +471,53 @@ async def test_schema_invalid_storyboard_raises_output_validation_error(tmp_path
 
     with pytest.raises(OutputValidationError):
         await agent.generate(make_concept(), make_script(), make_review())
+
+
+@pytest.mark.asyncio
+async def test_single_storyboard_call_emits_valid_illustration_spec(tmp_path: Path) -> None:
+    payload = storyboard_payload(
+        visual_asset_type=VisualAssetType.AI_IMAGE,
+        generation_prompt="Legacy prompt retained for compatibility.",
+        illustration_spec={
+            "scene_type": "character",
+            "purpose": "Show the saver choosing a sustainable habit.",
+            "description": "The saver reviews a simple budget folder.",
+            "character_ids": ["SAVER_01"],
+            "environment": "simple neutral workspace",
+            "key_objects": ["budget folder"],
+            "mood": "calm",
+            "prohibited_elements": ["generated text", "precise numbers"],
+        },
+    )
+    agent, client = make_agent(tmp_path, json.dumps(payload))
+
+    storyboard = await agent.generate(make_concept(), make_script(), make_review())
+
+    assert client.calls == 1
+    assert storyboard.scenes[0].illustration_spec is not None
+    assert storyboard.scenes[0].illustration_spec.character_ids == ["SAVER_01"]
+    assert storyboard.scenes[0].visual_asset_type == VisualAssetType.AI_IMAGE
+    assert storyboard.scenes[0].generation_prompt == "Legacy prompt retained for compatibility."
+
+
+@pytest.mark.asyncio
+async def test_unknown_illustration_character_fails_after_single_call(tmp_path: Path) -> None:
+    payload = storyboard_payload(
+        visual_asset_type=VisualAssetType.AI_IMAGE,
+        generation_prompt="Legacy compatibility prompt.",
+        illustration_spec={
+            "scene_type": "character",
+            "purpose": "Show a financial decision.",
+            "description": "A recurring person reviews a budget.",
+            "character_ids": ["UNKNOWN_01"],
+        },
+    )
+    agent, client = make_agent(tmp_path, json.dumps(payload))
+
+    with pytest.raises(StoryboardIllustrationValidationError, match="illustration metadata"):
+        await agent.generate(make_concept(), make_script(), make_review())
+
+    assert client.calls == 1
 
 
 @pytest.mark.asyncio

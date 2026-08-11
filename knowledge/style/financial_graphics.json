@@ -1,0 +1,28 @@
+{
+  "contract_version": "1.0",
+  "philosophy": "Deterministic financial graphics communicate one exact, verifiable financial relationship at a time.",
+  "responsibility": {
+    "chart_spec": "Authoritative for exact values, labels, percentages, ratios, axes, and annotations.",
+    "illustration": "Supports conceptual storytelling but is never authoritative for exact financial data."
+  },
+  "principles": [
+    "Preserve numeric accuracy and declared value semantics.",
+    "Use one primary message per chart.",
+    "Keep visual density minimal and mobile-legible.",
+    "Avoid chartjunk, decorative 3D, and glossy dashboard aesthetics.",
+    "Use editorial annotations sparingly to clarify the financial mechanism.",
+    "Represent positive and negative meaning semantically, not decoratively."
+  ],
+  "brand_alignment": [
+    "Use a warm paper background and deep navy hierarchy.",
+    "Use Wealth Decoded gold selectively for emphasis.",
+    "Use muted green and red only for positive and negative financial meaning.",
+    "Prefer minimal grid lines and an illustrated-book editorial character."
+  ],
+  "data_rules": [
+    "Percentage values are percentage points: 15.0 means 15%.",
+    "Exact text and numbers are allowed because deterministic graphics own their data.",
+    "Sourced facts retain traceable references or remain marked for verification.",
+    "Hypothetical and derived values are explicitly classified rather than inferred."
+  ]
+}

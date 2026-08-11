@@ -38,6 +38,9 @@ from shared.exceptions.ai import VisualAssetPersistenceError, VisualProviderUnav
 from shared.models.script_review import ScriptReview
 from shared.models.storyboard import Storyboard
 from shared.models.visual_assets import VisualAssetResult
+from shared.visual.illustration_dependencies import (
+    build_production_illustration_dependencies,
+)
 from shared.visual.image_provider import OpenAIImageGenerationProvider
 from shared.visual.persistence import VisualAssetPersistence
 from shared.visual.providers import ImageGenerationProvider
@@ -110,12 +113,16 @@ def build_dependencies(root: Path) -> PipelineDependencies:
         image_provider = ManifestOnlyImageProvider()
     from agents.visual_asset_agent.service import VisualAssetGenerationService
 
+    illustration = build_production_illustration_dependencies(knowledge_loader, root)
     visual_service = VisualAssetGenerationService(
         image_provider,
         TypographyRenderer(),
         live_generation=visual_settings.live_generation,
         max_live_images=visual_settings.max_live_images,
         fail_fast=visual_settings.fail_fast,
+        illustration_prompt_builder=illustration.prompt_builder,
+        composition_planner=illustration.composition_planner,
+        character_reference_selector=illustration.reference_selector,
     )
     return PipelineDependencies(
         topic_service=TopicDiscoveryService(

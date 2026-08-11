@@ -55,6 +55,25 @@ def make_scene(
         ),
         "verification_required": False,
         "production_notes": [],
+        "chart_spec": (
+            {
+                "chart_type": "line",
+                "purpose": "Show deterministic financial change.",
+                "title": "Financial progression",
+                "data_origin": "hypothetical",
+                "series": [
+                    {
+                        "series_id": "value",
+                        "label": "Value",
+                        "semantic_role": "primary",
+                        "value_format": {"format_type": "number"},
+                        "points": [{"label": "Current", "value": 1}],
+                    }
+                ],
+            }
+            if visual_asset_type == VisualAssetType.CHART
+            else None
+        ),
     }
     values.update(overrides)
     return StoryboardScene.model_validate(values)

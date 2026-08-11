@@ -7,9 +7,15 @@ from typing import Any
 from elevenlabs import AsyncElevenLabs
 from loguru import logger
 from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from shared.audio.provider import TextToSpeechProvider
+from shared.configuration import SECRETS_FILE, toml_settings_source
 from shared.constants import (
     DEFAULT_ELEVENLABS_MODEL_ID,
     DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
@@ -24,9 +30,27 @@ from shared.models.voiceover import VoiceSettings
 
 
 class ElevenLabsSettings(BaseSettings):
-    """ElevenLabs configuration sourced from environment variables or .env."""
+    """ElevenLabs settings sourced from TOML, secrets, or process environment."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", populate_by_name=True)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        del dotenv_settings
+        return (
+            init_settings,
+            env_settings,
+            DotEnvSettingsSource(settings_cls, env_file=SECRETS_FILE),
+            toml_settings_source(settings_cls, "voiceover"),
+            file_secret_settings,
+        )
 
     api_key: SecretStr = Field(validation_alias="ELEVENLABS_API_KEY")
     voice_id: str = Field(validation_alias="ELEVENLABS_VOICE_ID")

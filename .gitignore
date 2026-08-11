@@ -1,5 +1,9 @@
 .DS_Store
 .env
+.env.*
+.secrets.env
+.secrets.env.*
+!.secrets.env.example
 .venv/
 __pycache__/
 *.py[cod]

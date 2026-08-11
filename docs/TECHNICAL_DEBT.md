@@ -44,8 +44,8 @@ This list records observed debt only; it does not authorize speculative refactor
 
 ### Database template and code defaults differ intentionally
 
-- **Evidence:** `.env.example` uses Docker host `db`; `Settings` defaults to `localhost`.
-- **Affected files:** `.env.example`, `apps/api/app/config/settings.py`.
+- **Evidence:** Docker Compose overrides the local database default with the Docker host `db`.
+- **Affected files:** `docker-compose.yml`, `apps/api/app/config/settings.py`.
 - **Impact:** local setup can select the wrong DSN if the distinction is missed.
 - **Recommended sprint:** configuration UX/documentation follow-up.
 - **Blocks video assembly:** No.

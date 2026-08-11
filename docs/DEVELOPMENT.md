@@ -26,7 +26,8 @@ use pip to add project dependencies.
 - Run the full quality suite before handoff.
 - Use conventional commit messages such as `feat(scope): description` or
   `refactor(scope): description`.
-- Do not commit `.env`, `.venv`, generated packages, caches, or media outputs.
+- Do not commit `.secrets.env`, local environment variants, `.venv`, generated packages, caches,
+  or media outputs.
 
 ## Editor and commands
 

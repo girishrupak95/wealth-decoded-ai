@@ -4,13 +4,15 @@ import asyncio
 import base64
 import binascii
 import re
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 from loguru import logger
 from openai import APIConnectionError, APITimeoutError
 
-from shared.visual.providers import ImageGenerationProvider
+from shared.models.image_generation import ImageReferenceCapability, ImageReferenceInput
+from shared.visual.providers import ImageGenerationProvider, ImageReferenceCapabilityError
 
 
 class ImageProviderError(RuntimeError):
@@ -46,6 +48,11 @@ class OpenAIImageGenerationProvider(ImageGenerationProvider):
         self._client, self._model, self._quality = client, model, quality
         self._max_attempts = max_attempts
         self._logger = logger.bind(component=self.__class__.__name__, provider="openai")
+
+    @property
+    def reference_capability(self) -> ImageReferenceCapability:
+        """The installed SDK supports multiple local inputs through image editing."""
+        return ImageReferenceCapability.MULTIPLE_REFERENCES
 
     async def generate_image(
         self,
@@ -87,6 +94,55 @@ class OpenAIImageGenerationProvider(ImageGenerationProvider):
                     raise classified from error
                 await asyncio.sleep(0.2 * (attempt + 1))
         raise ImageProviderError("OpenAI image generation retries exhausted")
+
+    async def generate_image_with_references(
+        self,
+        prompt: str,
+        *,
+        references: list[ImageReferenceInput],
+        width: int,
+        height: int,
+        output_format: str,
+        metadata: dict[str, object],
+    ) -> bytes:
+        """Generate through the official local-image edit/reference mechanism."""
+        del metadata
+        if not references:
+            raise ImageReferenceCapabilityError("At least one image reference is required.")
+        started = perf_counter()
+        size = self._supported_size(width, height)
+        images = [Path(reference.asset_path) for reference in references]
+        for attempt in range(self._max_attempts):
+            try:
+                response = await self._client.images.edit(
+                    image=images,
+                    model=self._model,
+                    prompt=prompt,
+                    size=size,
+                    quality=self._quality,
+                    output_format=output_format,
+                )
+                image = self._extract_image(response)
+                self._logger.info(
+                    "reference_image_generation_finished",
+                    prompt_length=len(prompt),
+                    reference_count=len(references),
+                    model=self._model,
+                    requested_size=size,
+                    duration=round(perf_counter() - started, 3),
+                    status="succeeded",
+                )
+                return image
+            except ImageProviderError as error:
+                self._log_failure(error, prompt, size)
+                raise
+            except Exception as error:
+                classified = self._classify_error(error)
+                self._log_failure(classified, prompt, size, type(error).__name__)
+                if not classified.retryable or attempt == self._max_attempts - 1:
+                    raise classified from error
+                await asyncio.sleep(0.2 * (attempt + 1))
+        raise ImageProviderError("OpenAI reference image generation retries exhausted")
 
     async def health(self) -> bool:
         try:

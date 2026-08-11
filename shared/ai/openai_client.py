@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 
 from app.config.settings import OpenAISettings
 from shared.ai.llm_client import LLMClient, LLMRequest
-from shared.exceptions.ai import OpenAIRequestError
+from shared.exceptions.ai import OpenAIOutputTokenLimitError, OpenAIRequestError
 
 _TEMPERATURE_SUPPORTED_MODEL_PREFIXES = ("gpt-3.5", "gpt-4")
 
@@ -38,7 +38,7 @@ class OpenAIClient(LLMClient):
                 model=self._settings.model,
                 incomplete_reason=incomplete_reason,
             )
-            raise OpenAIRequestError(
+            raise OpenAIOutputTokenLimitError(
                 "OpenAI response was truncated because the output-token limit was reached."
             )
         output_text: object = response.output_text
@@ -68,7 +68,7 @@ class OpenAIClient(LLMClient):
         }
         if request.system_template is not None:
             parameters["instructions"] = request.system_template
-        parameters["max_output_tokens"] = self._settings.max_tokens
+        parameters["max_output_tokens"] = request.max_output_tokens or self._settings.max_tokens
         if self._supports_temperature():
             if self._settings.temperature is not None:
                 parameters["temperature"] = self._settings.temperature

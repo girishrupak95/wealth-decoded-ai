@@ -1,19 +1,52 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic import Field, PostgresDsn, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+from shared.configuration import SECRETS_FILE, toml_settings_source
 
 
-class Settings(BaseSettings):
-    """Runtime configuration sourced from environment variables."""
+class TomlConfiguredSettings(BaseSettings):
+    """Base settings precedence: init, process environment, secrets, TOML, defaults."""
+
+    toml_section: ClassVar[str] = ""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        del dotenv_settings
+        secrets = DotEnvSettingsSource(settings_cls, env_file=SECRETS_FILE)
+        return (
+            init_settings,
+            env_settings,
+            secrets,
+            toml_settings_source(settings_cls, cls.toml_section),
+            file_secret_settings,
+        )
+
+
+class Settings(TomlConfiguredSettings):
+    """Runtime configuration sourced from committed TOML and the environment."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         env_prefix="WEALTH_",
         extra="ignore",
     )
+
+    toml_section: ClassVar[str] = "application"
 
     app_name: str = "wealth-decoded-ai"
     environment: str = "local"
@@ -28,15 +61,15 @@ class Settings(BaseSettings):
     request_id_header: str = "X-Request-ID"
 
 
-class OpenAISettings(BaseSettings):
-    """OpenAI provider configuration sourced from environment variables."""
+class OpenAISettings(TomlConfiguredSettings):
+    """OpenAI settings with a secret key sourced outside committed TOML."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         env_prefix="WEALTH_OPENAI_",
         extra="ignore",
     )
+
+    toml_section: ClassVar[str] = "openai"
 
     api_key: SecretStr
     model: str
@@ -44,15 +77,15 @@ class OpenAISettings(BaseSettings):
     max_tokens: int = Field(default=4_000, gt=0)
 
 
-class VisualAssetSettings(BaseSettings):
+class VisualAssetSettings(TomlConfiguredSettings):
     """Cost-control settings for visual asset package generation."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         env_prefix="VISUAL_ASSET_",
         extra="ignore",
     )
+
+    toml_section: ClassVar[str] = "visual_assets"
 
     live_generation: bool = False
     max_live_images: int = Field(default=5, ge=0)
@@ -61,14 +94,14 @@ class VisualAssetSettings(BaseSettings):
     image_quality: str | None = None
 
 
-class FFmpegRenderSettings(BaseSettings):
+class FFmpegRenderSettings(TomlConfiguredSettings):
     """Local FFmpeg render configuration; no provider credentials are required."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    toml_section: ClassVar[str] = "render"
 
     ffmpeg_executable: str = "ffmpeg"
     ffprobe_executable: str = "ffprobe"

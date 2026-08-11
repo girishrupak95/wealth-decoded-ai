@@ -1,16 +1,38 @@
 """Exceptions raised by the AI framework."""
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class OutputValidationIssue:
+    """One normalized schema issue without raw model output."""
+
+    field_path: str
+    error_type: str
+    message: str
+
 
 class OutputValidationError(Exception):
     """Raised when a response fails output validation."""
 
-    def __init__(self, message: str, *, error_count: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_count: int | None = None,
+        validation_issues: tuple[OutputValidationIssue, ...] = (),
+    ) -> None:
         super().__init__(message)
         self.error_count = error_count
+        self.validation_issues = validation_issues
 
 
 class OpenAIRequestError(Exception):
     """Raised when an OpenAI request cannot be completed safely."""
+
+
+class OpenAIOutputTokenLimitError(OpenAIRequestError):
+    """Raised when the provider truncates output at the configured token ceiling."""
 
 
 class ScriptReviewNotApprovedError(Exception):

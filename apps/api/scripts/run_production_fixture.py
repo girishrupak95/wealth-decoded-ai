@@ -25,9 +25,9 @@ from agents.visual_asset_agent.service import VisualAssetGenerationService
 from agents.voiceover_agent.service import VoiceoverGenerationService
 from pydantic import BaseModel, ValidationError
 
-from app.config.settings import FFmpegRenderSettings, VisualAssetSettings
+from app.config.settings import FFmpegRenderSettings, OpenAISettings, VisualAssetSettings
 from shared.ai.openai_client import OpenAIClient
-from shared.audio.elevenlabs_provider import ElevenLabsTextToSpeechProvider
+from shared.audio.elevenlabs_provider import ElevenLabsSettings, ElevenLabsTextToSpeechProvider
 from shared.models.rendering import (
     RenderAudioCodec,
     RenderJobStatus,
@@ -168,13 +168,32 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
 
 def validate_live_configuration() -> list[str]:
     """Return missing provider configuration names without reading or displaying values."""
-    required = (
-        "WEALTH_OPENAI_API_KEY",
-        "WEALTH_OPENAI_MODEL",
-        "ELEVENLABS_API_KEY",
-        "ELEVENLABS_VOICE_ID",
-    )
-    return [name for name in required if not os.environ.get(name)]
+    missing: list[str] = []
+    try:
+        openai = OpenAISettings()
+        if not openai.api_key.get_secret_value():
+            missing.append("WEALTH_OPENAI_API_KEY")
+        if not openai.model.strip():
+            missing.append("WEALTH_OPENAI_MODEL")
+    except ValidationError as error:
+        fields = {str(item["loc"][0]) for item in error.errors() if item["loc"]}
+        if "api_key" in fields:
+            missing.append("WEALTH_OPENAI_API_KEY")
+        if "model" in fields:
+            missing.append("WEALTH_OPENAI_MODEL")
+    try:
+        elevenlabs = ElevenLabsSettings()
+        if not elevenlabs.api_key.get_secret_value():
+            missing.append("ELEVENLABS_API_KEY")
+        if not elevenlabs.voice_id.strip():
+            missing.append("ELEVENLABS_VOICE_ID")
+    except ValidationError as error:
+        fields = {str(item["loc"][0]) for item in error.errors() if item["loc"]}
+        if "ELEVENLABS_API_KEY" in fields:
+            missing.append("ELEVENLABS_API_KEY")
+        if "ELEVENLABS_VOICE_ID" in fields:
+            missing.append("ELEVENLABS_VOICE_ID")
+    return list(dict.fromkeys(missing))
 
 
 def create_run_directory(output_root: Path, timestamp: datetime | None = None) -> Path:

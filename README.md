@@ -12,7 +12,9 @@ It does **not** yet assemble a final MP4.
 
 ## Setup
 
-Copy `.env.example` to `.env` and adjust values for your environment. Install dependencies with `uv sync`.
+Review committed non-secret settings in `config/settings.toml`, then create a local ignored
+`.secrets.env` containing only the provider credentials you use. See
+`docs/configuration.md`. Install dependencies with `uv sync`.
 
 ## Commands
 
@@ -101,7 +103,7 @@ uv run python apps/api/scripts/run_visual_asset_generation.py
 ## Voiceover generation
 
 Voiceover generation uses ElevenLabs through a provider-independent interface and requires an
-approved script review. Configure the `ELEVENLABS_*` variables in `.env`, ensure `ffmpeg` and
+approved script review. Configure `ELEVENLABS_API_KEY` in `.secrets.env`, ensure `ffmpeg` and
 `ffprobe` are available, then run `uv run python apps/api/scripts/run_voiceover_generation.py`.
 
 ## Containers

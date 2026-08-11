@@ -94,6 +94,25 @@ def test_output_validator_rejects_invalid_json() -> None:
         OutputValidator().validate("invalid", Payload)
 
 
+def test_output_validator_exposes_safe_ordered_pydantic_issues() -> None:
+    class CompletePayload(BaseModel):
+        first: str
+        second: list[str]
+
+    with pytest.raises(OutputValidationError) as captured:
+        OutputValidator().validate("{}", CompletePayload)
+
+    error = captured.value
+    assert error.error_count == 2
+    assert [
+        (issue.field_path, issue.error_type, issue.message) for issue in error.validation_issues
+    ] == [
+        ("first", "missing", "Field required"),
+        ("second", "missing", "Field required"),
+    ]
+    assert "{}" not in str(error)
+
+
 @pytest.mark.asyncio
 async def test_base_agent_appends_generated_schema_without_mutating_request_data(
     tmp_path: Path,
@@ -107,6 +126,7 @@ async def test_base_agent_appends_generated_schema_without_mutating_request_data
 
     assert llm_client.request is not None
     assert llm_client.request.template == "User prompt: unchanged"
+    assert llm_client.request.max_output_tokens is None
     assert llm_client.request.context == context
     assert llm_client.request.knowledge == {"rule.md": "Knowledge remains unchanged"}
     system_template = llm_client.request.system_template

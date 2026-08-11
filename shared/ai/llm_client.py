@@ -14,6 +14,7 @@ class LLMRequest(BaseModel):
     system_template: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
     knowledge: dict[str, Any] = Field(default_factory=dict)
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 class LLMClient(ABC):

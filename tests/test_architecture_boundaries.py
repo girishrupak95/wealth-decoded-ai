@@ -25,4 +25,4 @@ def test_production_packages_have_no_circular_imports() -> None:
 def test_sensitive_and_generated_paths_are_ignored() -> None:
     """Repository policy keeps local secrets, environments, and generated media untracked."""
     entries = set((ROOT / ".gitignore").read_text(encoding="utf-8").splitlines())
-    assert {".env", ".venv/", "generated/"}.issubset(entries)
+    assert {".env", ".secrets.env", ".secrets.env.*", ".venv/", "generated/"}.issubset(entries)

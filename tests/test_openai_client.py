@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from app.config.settings import OpenAISettings
 from shared.ai import openai_client as openai_module
 from shared.ai.llm_client import LLMRequest
-from shared.exceptions.ai import OpenAIRequestError
+from shared.exceptions.ai import OpenAIOutputTokenLimitError, OpenAIRequestError
 
 DEFAULT_RESPONSE = SimpleNamespace(output_text="validated output")
 
@@ -117,6 +117,17 @@ async def test_unknown_model_omits_temperature_and_includes_output_limit(
 
 
 @pytest.mark.asyncio
+async def test_request_specific_output_limit_overrides_global_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, responses = create_client(monkeypatch, settings(model="gpt-5-mini", max_tokens=4000))
+
+    await client.generate(LLMRequest(template="storyboard", max_output_tokens=8000))
+
+    assert responses.requests[0]["max_output_tokens"] == 8000
+
+
+@pytest.mark.asyncio
 async def test_successful_output_extraction_is_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -146,7 +157,7 @@ async def test_incomplete_output_token_response_raises_without_logging_raw_outpu
     logged_messages: list[str] = []
     handler_id = logger.add(logged_messages.append, format="{message}")
     try:
-        with pytest.raises(OpenAIRequestError, match="output-token limit"):
+        with pytest.raises(OpenAIOutputTokenLimitError, match="output-token limit"):
             await client.generate(LLMRequest(template="private prompt"))
     finally:
         logger.remove(handler_id)
