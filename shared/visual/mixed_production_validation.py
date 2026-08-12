@@ -297,6 +297,7 @@ class MixedProductionValidationService:
             asset_path = self._relative(root, asset_file)
             checksum = checksum_sha256(asset_file)
         metadata = generated.metadata
+        rendered_text_block_count = metadata.get("rendered_text_block_count")
         spec = scene.illustration_spec
         chart = scene.chart_spec
         return MixedValidationScene(
@@ -328,6 +329,9 @@ class MixedProductionValidationService:
                 else "typography" if scene.visual_asset_type == VisualAssetType.TYPOGRAPHY else None
             ),
             on_screen_text_count=len(scene.on_screen_text),
+            rendered_text_block_count=(
+                rendered_text_block_count if isinstance(rendered_text_block_count, int) else None
+            ),
             source_width=(normalization.source_width if normalization else generated.width),
             source_height=(normalization.source_height if normalization else generated.height),
             final_width=(normalization.final_width if normalization else generated.width),

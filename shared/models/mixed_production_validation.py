@@ -43,6 +43,10 @@ class MixedValidationScene(BaseModel):
     verification_required: bool = False
     deterministic_renderer: str | None = None
     on_screen_text_count: int = Field(default=0, ge=0)
+    rendered_text_block_count: int | None = Field(default=None, ge=0)
+    reused_from_source: bool = False
+    source_asset_checksum: str | None = None
+    repair_action: str | None = None
     source_width: int | None = Field(default=None, gt=0)
     source_height: int | None = Field(default=None, gt=0)
     final_width: int | None = Field(default=None, gt=0)
@@ -97,6 +101,12 @@ class MixedProductionValidationManifest(BaseModel):
     chart_scene_count: int = Field(ge=0)
     typography_scene_count: int = Field(ge=0)
     image_request_count: int = Field(ge=0, le=5)
+    repair_mode: bool = False
+    source_run_id: str | None = None
+    source_manifest_checksum: str | None = None
+    source_storyboard_checksum: str | None = None
+    source_historical_image_request_count: int | None = Field(default=None, ge=0, le=5)
+    repair_image_request_count: int | None = Field(default=None, ge=0, le=0)
     storyboard_status: MixedValidationStatus
     illustration_validation_status: MixedValidationStatus
     chart_validation_status: MixedValidationStatus
