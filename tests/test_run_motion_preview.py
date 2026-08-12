@@ -76,3 +76,10 @@ async def test_cli_all_illustrations_selection_and_manifest_reporting(
     call = renderer.render.await_args
     assert call.kwargs["scene_ids"] == ["image-1", "image-2"]
     assert "LOCAL MOTION PREVIEW: passed" in capsys.readouterr().out
+
+
+def test_cli_all_supported_option() -> None:
+    options = cli.parse_arguments(
+        ["compiled.json", "--approved-package", "approved", "--all-supported"]
+    )
+    assert options.all_supported is True

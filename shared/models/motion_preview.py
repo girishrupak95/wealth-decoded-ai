@@ -21,6 +21,10 @@ class MotionPreviewSceneResult(BaseModel):
     frame_count: int = Field(gt=0)
     checksum_sha256: str
     render_version: str = "1.0"
+    semantic_renderer: str | None = None
+    semantic_motion_types_rendered: list[str] = Field(default_factory=list)
+    semantic_motion_types_deferred: list[str] = Field(default_factory=list)
+    final_frame_equivalence: float | None = Field(default=None, ge=0, le=1)
     warnings: list[str] = Field(default_factory=list)
 
 

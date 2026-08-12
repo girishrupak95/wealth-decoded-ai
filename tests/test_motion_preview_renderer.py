@@ -314,21 +314,26 @@ async def test_render_selected_illustrations_manifest_and_truncation(
 
 
 @pytest.mark.asyncio
-async def test_non_illustration_and_overwrite_are_guarded(
+async def test_semantic_scenes_render_and_overwrite_is_guarded(
     preview_fixture: tuple[Path, Any, LocalMotionPreviewRenderer, FakeEncoder],
     tmp_path: Path,
 ) -> None:
     promoted, compiled, renderer, _ = preview_fixture
-    with pytest.raises(MotionPreviewError, match="Unsupported"):
-        await renderer.render(
-            compiled,
-            approved_package=promoted,
-            output_root=tmp_path / "previews",
-            scene_ids=[compiled.scenes[2].scene_id],
-            width=320,
-            height=180,
-            fps=2,
-        )
+    semantic_result, _ = await renderer.render(
+        compiled,
+        approved_package=promoted,
+        output_root=tmp_path / "semantic",
+        scene_ids=[compiled.scenes[2].scene_id, compiled.scenes[4].scene_id],
+        width=320,
+        height=180,
+        fps=2,
+        max_duration=0.5,
+    )
+    assert [item.semantic_renderer for item in semantic_result.scenes] == [
+        "financial_graphics_semantic",
+        "typography_semantic",
+    ]
+    assert all(item.final_frame_equivalence is not None for item in semantic_result.scenes)
     await renderer.render(
         compiled,
         approved_package=promoted,

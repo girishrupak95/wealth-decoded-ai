@@ -10,22 +10,29 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from PIL import Image, ImageEnhance, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageEnhance, ImageStat, UnidentifiedImageError
 
 from shared.models.compiled_motion import (
     CompiledMotionAction,
     CompiledMotionPlan,
     CompiledSceneMotion,
+    CountUpState,
     EntranceState,
     HighlightState,
     OpacityState,
+    RevealState,
     TransformState,
 )
 from shared.models.motion import MotionEasing, MotionType, SceneTransitionType
 from shared.models.motion_preview import MotionPreviewResult, MotionPreviewSceneResult
-from shared.models.storyboard import VisualAssetType
+from shared.models.storyboard import Storyboard, StoryboardScene, VisualAssetType
 from shared.models.visual_package_approval import PromotedVisualPackageManifest
+from shared.visual.chart_motion_renderer import ChartAnimationState, ChartMotionRenderer
 from shared.visual.processing import checksum_sha256, write_bytes_atomic
+from shared.visual.typography_motion_renderer import (
+    TypographyAnimationState,
+    TypographyMotionRenderer,
+)
 from shared.visual.visual_package_approval import VisualPackageApprovalService
 
 
@@ -90,9 +97,13 @@ class LocalMotionPreviewRenderer:
         self,
         approval_service: VisualPackageApprovalService,
         encoder: PreviewEncoder,
+        chart_renderer: ChartMotionRenderer | None = None,
+        typography_renderer: TypographyMotionRenderer | None = None,
     ) -> None:
         self._approval_service = approval_service
         self._encoder = encoder
+        self._chart_renderer = chart_renderer or ChartMotionRenderer()
+        self._typography_renderer = typography_renderer or TypographyMotionRenderer()
 
     def validate_inputs(
         self, compiled: CompiledMotionPlan, approved_package: Path
@@ -134,7 +145,12 @@ class LocalMotionPreviewRenderer:
         selected = [scene for scene in compiled.scenes if scene.scene_id in set(scene_ids)]
         if not selected or {scene.scene_id for scene in selected} != set(scene_ids):
             raise MotionPreviewError("Requested preview scene was not found.")
-        if any(scene.visual_asset_type != VisualAssetType.AI_IMAGE for scene in selected):
+        supported = {
+            VisualAssetType.AI_IMAGE,
+            VisualAssetType.CHART,
+            VisualAssetType.TYPOGRAPHY,
+        }
+        if any(scene.visual_asset_type not in supported for scene in selected):
             raise MotionPreviewError("Unsupported motion preview asset type.")
         destination = output_root / compiled.package_id / "preview"
         if destination.exists() and not overwrite:
@@ -143,12 +159,19 @@ class LocalMotionPreviewRenderer:
             shutil.rmtree(destination)
         destination.mkdir(parents=True)
         approved_by_id = {scene.scene_id: scene for scene in package.scene_assets}
+        storyboard = Storyboard.model_validate_json(
+            (approved_package / "storyboard" / "storyboard.json").read_text(encoding="utf-8")
+        )
+        storyboard_by_id = {scene.scene_id: scene for scene in storyboard.scenes}
         results: list[MotionPreviewSceneResult] = []
         warnings: list[str] = []
         try:
             for scene in selected:
                 approved = approved_by_id[scene.scene_id]
                 source = approved_package / approved.asset_path
+                semantic_scene = storyboard_by_id.get(scene.scene_id)
+                if semantic_scene is None:
+                    raise MotionPreviewError("Preview semantic scene source is unavailable.")
                 duration = min(scene.duration_seconds, max_duration or scene.duration_seconds)
                 scene_warnings = self._warnings(scene, duration < scene.duration_seconds)
                 output = destination / f"scene-{scene.sequence_number:02d}-preview.mp4"
@@ -160,6 +183,7 @@ class LocalMotionPreviewRenderer:
                         frame = self.render_frame(
                             source,
                             scene,
+                            semantic_scene=semantic_scene,
                             time_seconds=time_seconds,
                             width=width,
                             height=height,
@@ -168,6 +192,19 @@ class LocalMotionPreviewRenderer:
                     await self._encoder.encode(frames, output, fps=fps)
                 if not output.is_file() or output.stat().st_size == 0:
                     raise MotionPreviewError("Preview encoder produced no usable output.")
+                renderer_name = self._semantic_renderer(scene.visual_asset_type)
+                rendered_types, deferred_types = self._motion_type_status(scene)
+                equivalence = None
+                if renderer_name is not None:
+                    final_frame = self.render_frame(
+                        source,
+                        scene,
+                        semantic_scene=semantic_scene,
+                        time_seconds=scene.duration_seconds,
+                        width=width,
+                        height=height,
+                    )
+                    equivalence = self._equivalence(final_frame, source)
                 results.append(
                     MotionPreviewSceneResult(
                         scene_id=scene.scene_id,
@@ -181,6 +218,10 @@ class LocalMotionPreviewRenderer:
                         duration_seconds=duration,
                         frame_count=frame_count,
                         checksum_sha256=checksum_sha256(output),
+                        semantic_renderer=renderer_name,
+                        semantic_motion_types_rendered=rendered_types,
+                        semantic_motion_types_deferred=deferred_types,
+                        final_frame_equivalence=equivalence,
                         warnings=scene_warnings,
                     )
                 )
@@ -209,10 +250,19 @@ class LocalMotionPreviewRenderer:
         source: Path,
         scene: CompiledSceneMotion,
         *,
+        semantic_scene: StoryboardScene | None = None,
         time_seconds: float,
         width: int,
         height: int,
     ) -> Image.Image:
+        if scene.visual_asset_type == VisualAssetType.CHART:
+            if semantic_scene is None or semantic_scene.chart_spec is None:
+                raise MotionPreviewError("Chart semantic source is unavailable.")
+            return self._render_chart(scene, semantic_scene, time_seconds, width, height)
+        if scene.visual_asset_type == VisualAssetType.TYPOGRAPHY:
+            if semantic_scene is None or not semantic_scene.on_screen_text:
+                raise MotionPreviewError("Typography semantic source is unavailable.")
+            return self._render_typography(scene, semantic_scene, time_seconds, width, height)
         try:
             with Image.open(source) as opened:
                 opened.load()
@@ -257,6 +307,79 @@ class LocalMotionPreviewRenderer:
             rendered = Image.blend(black, rendered, opacity)
         return rendered
 
+    def _render_chart(
+        self,
+        scene: CompiledSceneMotion,
+        source: StoryboardScene,
+        time_seconds: float,
+        width: int,
+        height: int,
+    ) -> Image.Image:
+        reveal = 0.0
+        annotation = 0.0
+        highlight = 0.0
+        sequence: list[str] = []
+        for action in scene.actions:
+            if time_seconds < action.start_offset_seconds:
+                continue
+            state = self._interpolate(action, self._progress(action, time_seconds))
+            if action.semantic_sequence:
+                sequence = action.semantic_sequence
+            if isinstance(state, RevealState):
+                reveal = max(reveal, state.progress)
+            elif isinstance(state, EntranceState):
+                reveal = max(reveal, state.opacity)
+            elif isinstance(state, CountUpState):
+                reveal = max(reveal, state.progress)
+            elif isinstance(state, HighlightState):
+                annotation = max(annotation, state.strength)
+                highlight = max(highlight, state.strength)
+        if not scene.actions:
+            reveal = 1.0
+        assert source.chart_spec is not None
+        return self._chart_renderer.render(
+            source.chart_spec,
+            ChartAnimationState(reveal, annotation, highlight),
+            semantic_sequence=sequence,
+            width=width,
+            height=height,
+        )
+
+    def _render_typography(
+        self,
+        scene: CompiledSceneMotion,
+        source: StoryboardScene,
+        time_seconds: float,
+        width: int,
+        height: int,
+    ) -> Image.Image:
+        progress = [0.0] * len(source.on_screen_text)
+        for action in scene.actions:
+            if time_seconds < action.start_offset_seconds:
+                continue
+            state = self._interpolate(action, self._progress(action, time_seconds))
+            value = (
+                state.progress
+                if isinstance(state, RevealState)
+                else state.opacity if isinstance(state, OpacityState) else 0.0
+            )
+            semantic_id = action.target.semantic_id or ""
+            if semantic_id == "all-text":
+                progress = [max(item, value) for item in progress]
+            elif semantic_id.startswith("text-"):
+                try:
+                    index = int(semantic_id.removeprefix("text-")) - 1
+                except ValueError:
+                    continue
+                if 0 <= index < len(progress):
+                    progress[index] = max(progress[index], value)
+        return self._typography_renderer.render(
+            source.on_screen_text,
+            TypographyAnimationState(tuple(progress)),
+            width=width,
+            height=height,
+        )
+
     @staticmethod
     def _camera_frame(
         source: Image.Image,
@@ -300,7 +423,49 @@ class LocalMotionPreviewRenderer:
             return HighlightState(
                 strength=first.strength + (last.strength - first.strength) * progress
             )
+        if isinstance(first, RevealState) and isinstance(last, RevealState):
+            return RevealState(
+                progress=first.progress + (last.progress - first.progress) * progress
+            )
+        if isinstance(first, CountUpState) and isinstance(last, CountUpState):
+            return CountUpState(
+                progress=first.progress + (last.progress - first.progress) * progress,
+                value=first.value + (last.value - first.value) * progress,
+            )
         return last
+
+    @staticmethod
+    def _semantic_renderer(asset_type: VisualAssetType) -> str | None:
+        return {
+            VisualAssetType.CHART: "financial_graphics_semantic",
+            VisualAssetType.TYPOGRAPHY: "typography_semantic",
+        }.get(asset_type)
+
+    @staticmethod
+    def _motion_type_status(scene: CompiledSceneMotion) -> tuple[list[str], list[str]]:
+        supported = {
+            VisualAssetType.CHART: {
+                MotionType.BAR_REVEAL,
+                MotionType.LINE_DRAW,
+                MotionType.ELEMENT_ENTRANCE,
+                MotionType.PATH_DRAW,
+                MotionType.COUNT_UP,
+                MotionType.HIGHLIGHT,
+            },
+            VisualAssetType.TYPOGRAPHY: {MotionType.TEXT_REVEAL, MotionType.FADE_IN},
+        }.get(scene.visual_asset_type, set())
+        types = list(dict.fromkeys(action.source_motion_type.value for action in scene.actions))
+        return [item for item in types if MotionType(item) in supported], [
+            item for item in types if MotionType(item) not in supported
+        ]
+
+    @staticmethod
+    def _equivalence(frame: Image.Image, approved_source: Path) -> float:
+        with Image.open(approved_source) as opened:
+            approved = opened.convert("RGB").resize(frame.size, Image.Resampling.LANCZOS)
+        difference = ImageChops.difference(frame, approved)
+        mean = sum(ImageStat.Stat(difference).mean) / 3
+        return round(max(0.0, 1 - mean / 255), 6)
 
     @staticmethod
     def _warnings(scene: CompiledSceneMotion, truncated: bool) -> list[str]:
@@ -321,7 +486,8 @@ class LocalMotionPreviewRenderer:
             ):
                 warnings.append("isolated_element_preview_unavailable")
             elif action.source_motion_type == MotionType.HIGHLIGHT:
-                warnings.append("semantic_highlight_global_fallback")
+                if scene.visual_asset_type == VisualAssetType.AI_IMAGE:
+                    warnings.append("semantic_highlight_global_fallback")
             elif action.source_motion_type in {
                 MotionType.PATH_DRAW,
                 MotionType.LINE_DRAW,
@@ -329,7 +495,21 @@ class LocalMotionPreviewRenderer:
                 MotionType.COUNT_UP,
                 MotionType.TEXT_REVEAL,
             }:
-                warnings.append("unsupported_motion_preview")
+                supported_semantic = (
+                    scene.visual_asset_type == VisualAssetType.CHART
+                    and action.source_motion_type
+                    in {
+                        MotionType.PATH_DRAW,
+                        MotionType.LINE_DRAW,
+                        MotionType.BAR_REVEAL,
+                        MotionType.COUNT_UP,
+                    }
+                ) or (
+                    scene.visual_asset_type == VisualAssetType.TYPOGRAPHY
+                    and action.source_motion_type == MotionType.TEXT_REVEAL
+                )
+                if not supported_semantic:
+                    warnings.append("unsupported_motion_preview")
         return list(dict.fromkeys(warnings))
 
     @staticmethod

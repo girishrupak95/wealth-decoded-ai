@@ -26,6 +26,7 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--scene", action="append")
     selection.add_argument("--all-illustrations", action="store_true")
+    selection.add_argument("--all-supported", action="store_true")
     parser.add_argument("--width", type=int, default=960)
     parser.add_argument("--height", type=int, default=540)
     parser.add_argument("--fps", type=int, default=24)
@@ -47,7 +48,20 @@ async def async_main(options: argparse.Namespace) -> int:
                 if scene.visual_asset_type == VisualAssetType.AI_IMAGE
             ]
             if options.all_illustrations
-            else list(options.scene or [])
+            else (
+                [
+                    scene.scene_id
+                    for scene in compiled.scenes
+                    if scene.visual_asset_type
+                    in {
+                        VisualAssetType.AI_IMAGE,
+                        VisualAssetType.CHART,
+                        VisualAssetType.TYPOGRAPHY,
+                    }
+                ]
+                if options.all_supported
+                else list(options.scene or [])
+            )
         )
         renderer = LocalMotionPreviewRenderer(
             VisualPackageApprovalService(Path("generated/approved-visual-packages")),
