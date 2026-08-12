@@ -1,0 +1,18 @@
+{
+  "profile_version": "1.0",
+  "profile_name": "Wealth Decoded Restrained Motion",
+  "principles": [
+    "Prefer subtle motion that supports narration.",
+    "Allow editorial rest; do not create constant movement.",
+    "Avoid distracting loops and artificial puppet animation.",
+    "Preserve composition, negative space, and still-art character.",
+    "Reveal charts in their semantic reading order.",
+    "Prioritize typography readability and adequate hold time.",
+    "Keep transitions short and restrained."
+  ],
+  "limits": {
+    "maximum_full_frame_actions_per_scene": 1,
+    "maximum_actions_per_scene": 4,
+    "default_intensity": "subtle"
+  }
+}
