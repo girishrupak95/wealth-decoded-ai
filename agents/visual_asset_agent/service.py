@@ -268,7 +268,7 @@ class VisualAssetGenerationService:
         if scene.visual_asset_type == VisualAssetType.TYPOGRAPHY:
             if not scene.on_screen_text:
                 raise RuntimeError("Typography scene has no on-screen text")
-            typography_rendered = self._typography_renderer.render(scene.on_screen_text[0])
+            typography_rendered = self._typography_renderer.render_blocks(scene.on_screen_text)
             return self._base(
                 scene,
                 VisualAssetKind.TYPOGRAPHY,
@@ -278,6 +278,10 @@ class VisualAssetGenerationService:
                 height=typography_rendered.height,
                 mime_type=typography_rendered.mime_type,
                 content=typography_rendered.content,
+                metadata={
+                    "on_screen_text_count": len(scene.on_screen_text),
+                    "rendered_text_block_count": typography_rendered.rendered_text_block_count,
+                },
             )
         if scene.visual_asset_type == VisualAssetType.AI_IMAGE:
             if scene.illustration_spec is not None:

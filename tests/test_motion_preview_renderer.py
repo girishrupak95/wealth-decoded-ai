@@ -292,8 +292,8 @@ async def test_render_selected_illustrations_manifest_and_truncation(
         approved_package=promoted,
         output_root=tmp_path / "previews",
         scene_ids=[compiled.scenes[0].scene_id, compiled.scenes[1].scene_id],
-        width=320,
-        height=180,
+        width=960,
+        height=540,
         fps=4,
         max_duration=1,
     )
@@ -324,8 +324,8 @@ async def test_semantic_scenes_render_and_overwrite_is_guarded(
         approved_package=promoted,
         output_root=tmp_path / "semantic",
         scene_ids=[compiled.scenes[2].scene_id, compiled.scenes[4].scene_id],
-        width=320,
-        height=180,
+        width=960,
+        height=540,
         fps=2,
         max_duration=0.5,
     )

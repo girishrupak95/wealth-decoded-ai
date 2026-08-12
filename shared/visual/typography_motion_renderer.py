@@ -45,12 +45,7 @@ class TypographyMotionRenderer:
         return canvas
 
     def _card(self, texts: list[str], width: int, height: int) -> Image.Image:
-        result = self._renderer.render(
-            texts[0],
-            supporting_text="  •  ".join(texts[1:]) or None,
-            width=width,
-            height=height,
-        )
+        result = self._renderer.render_blocks(texts, width=width, height=height)
         with Image.open(io.BytesIO(result.content)) as opened:
             opened.load()
             return cast(Image.Image, opened.convert("RGB"))

@@ -189,6 +189,10 @@ class CountingTypographyRenderer(TypographyRenderer):
         self.calls += 1
         return super().render(primary_text, **kwargs)
 
+    def render_blocks(self, text_blocks: list[str], **kwargs):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return super().render_blocks(text_blocks, **kwargs)
+
 
 @pytest.mark.asyncio
 async def test_provider_routing_is_strict(

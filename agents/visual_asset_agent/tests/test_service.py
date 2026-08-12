@@ -212,6 +212,16 @@ def renderer() -> MagicMock:
         rendered_text_lines=1,
         font_path="font",
     )
+    subject.render_blocks.return_value = TypographyRenderResult(
+        content=b"png",
+        width=1920,
+        height=1080,
+        mime_type="image/png",
+        rendered_text_lines=1,
+        font_path="font",
+        rendered_text_block_count=1,
+        text_blocks=("BUILD THE HABIT",),
+    )
     return subject
 
 
@@ -423,7 +433,35 @@ async def test_typography_and_chart_mappings_preserve_contracts() -> None:
     assert chart.metadata["source_references"] == []
     assert "Chart verification required." in result.manifest.warnings
     assert "Chart source reference missing." not in result.manifest.warnings
-    text.render.assert_called_once()
+    text.render_blocks.assert_called_once_with(["BUILD THE HABIT"])
+
+
+@pytest.mark.asyncio
+async def test_typography_route_passes_all_ordered_blocks_and_records_count() -> None:
+    text = renderer()
+    blocks = ["Headline", "Support", "CTA", "Educational information only."]
+    text.render_blocks.return_value = TypographyRenderResult(
+        content=b"complete-png",
+        width=1920,
+        height=1080,
+        mime_type="image/png",
+        rendered_text_lines=1,
+        font_path="font",
+        rendered_text_block_count=4,
+        text_blocks=tuple(blocks),
+    )
+    image = MockImageProvider()
+
+    result = await service(image, text).generate(
+        review(), storyboard([scene(1, VisualAssetType.TYPOGRAPHY, on_screen_text=blocks)])
+    )
+
+    asset = result.manifest.assets[0]
+    text.render_blocks.assert_called_once_with(blocks)
+    image.generate_mock.assert_not_awaited()
+    assert asset.content == b"complete-png"
+    assert asset.metadata["on_screen_text_count"] == 4
+    assert asset.metadata["rendered_text_block_count"] == 4
 
 
 @pytest.mark.asyncio
@@ -460,7 +498,7 @@ async def test_sourced_chart_without_reference_retains_missing_source_warning() 
 @pytest.mark.asyncio
 async def test_typography_failure_and_unexpected_failure_still_cleanup() -> None:
     text = renderer()
-    text.render.side_effect = RuntimeError("renderer unavailable")
+    text.render_blocks.side_effect = RuntimeError("renderer unavailable")
     image = MockImageProvider()
     result = await service(image, text).generate(
         review(),
@@ -473,7 +511,7 @@ async def test_typography_failure_and_unexpected_failure_still_cleanup() -> None
     image.close_mock.assert_awaited_once()
 
     fast_text = renderer()
-    fast_text.render.side_effect = RuntimeError("renderer unavailable")
+    fast_text.render_blocks.side_effect = RuntimeError("renderer unavailable")
     fast_image = MockImageProvider()
     with pytest.raises(RuntimeError, match="renderer unavailable"):
         await service(fast_image, fast_text, fail_fast=True).generate(

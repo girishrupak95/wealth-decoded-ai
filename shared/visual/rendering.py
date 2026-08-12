@@ -38,6 +38,8 @@ class TypographyRenderResult:
     accent_bounds: tuple[int, int, int, int] = (0, 0, 0, 0)
     icon_bounds: tuple[int, int, int, int] = (0, 0, 0, 0)
     headline_lines: tuple[str, ...] = ()
+    rendered_text_block_count: int = 1
+    text_blocks: tuple[str, ...] = ()
 
 
 class TypographyRenderer:
@@ -62,16 +64,51 @@ class TypographyRenderer:
         icon_name: str | None = None,
     ) -> TypographyRenderResult:
         """Render PNG bytes with width-aware wrapping and deterministic hierarchy."""
+        blocks = [primary_text]
+        if supporting_text:
+            blocks.append(supporting_text)
+        return self.render_blocks(
+            blocks,
+            accent_label=accent_label,
+            width=width,
+            height=height,
+            background=background,
+            primary_color=primary_color,
+            accent_color=accent_color,
+            secondary_color=secondary_color,
+            icon_name=icon_name,
+        )
+
+    def render_blocks(
+        self,
+        text_blocks: list[str],
+        *,
+        accent_label: str | None = None,
+        width: int = DEFAULT_TYPOGRAPHY_WIDTH,
+        height: int = DEFAULT_TYPOGRAPHY_HEIGHT,
+        background: str = DEFAULT_TYPOGRAPHY_BACKGROUND,
+        primary_color: str = DEFAULT_TYPOGRAPHY_PRIMARY,
+        accent_color: str = DEFAULT_TYPOGRAPHY_ACCENT,
+        secondary_color: str = "#B8C2D6",
+        icon_name: str | None = None,
+    ) -> TypographyRenderResult:
+        """Render authoritative ordered blocks through the canonical layout."""
+        blocks = [block for block in text_blocks if block.strip()]
         if (
-            not primary_text.strip()
-            or len(primary_text) > 120
-            or (supporting_text and len(supporting_text) > 220)
+            not blocks
+            or len(blocks) != len(text_blocks)
+            or len(blocks) > 6
+            or len(blocks[0]) > 120
+            or any(len(block) > 220 for block in blocks[1:])
+            or sum(len(block) for block in blocks) > 420
             or (accent_label and len(accent_label) > 40)
         ):
             raise TypographyRenderError("Typography text is empty or exceeds its allowed length")
         if width < 320 or height < 180:
             raise TypographyRenderError("Typography dimensions are below the practical minimum")
         started = perf_counter()
+        primary_text = blocks[0]
+        supporting_blocks = blocks[1:]
         font_file = self._resolve_font()
         image = self._background(width, height, background)
         draw = ImageDraw.Draw(image)
@@ -89,7 +126,7 @@ class TypographyRenderer:
         draw.text((safe_margin, safe_margin), label, font=label_font, fill=accent_color)
         line_metrics = [draw.textbbox((0, 0), line, font=title_font) for line in lines]
         headline_height = sum(box[3] - box[1] for box in line_metrics) + max(0, len(lines) - 1) * 10
-        supporting_height = max(0, height // 9 if supporting_text else 0)
+        supporting_height = max(0, len(supporting_blocks) * height // 13)
         y: float = max(height * 0.24, (height - headline_height - supporting_height) * 0.43)
         for line in lines:
             box = draw.textbbox((0, 0), line, font=title_font)
@@ -103,8 +140,8 @@ class TypographyRenderer:
         )
         draw.rounded_rectangle(accent_bounds, radius=3, fill=accent_color)
         y = accent_bounds[3] + height * 0.045
-        if supporting_text:
-            for line in self._wrap(draw, supporting_text, body_font, maximum_text_width):
+        for block in supporting_blocks:
+            for line in self._wrap(draw, block, body_font, maximum_text_width):
                 box = draw.textbbox((0, 0), line, font=body_font)
                 draw.text(
                     (safe_margin, y),
@@ -113,6 +150,7 @@ class TypographyRenderer:
                     fill=secondary_color,
                 )
                 y += box[3] - box[1] + 7
+            y += max(8, height // 90)
         resolved_icon = self._icon(primary_text, icon_name)
         icon_size = max(38, min(width, height) // 10)
         icon_bounds = (
@@ -121,6 +159,8 @@ class TypographyRenderer:
             safe_margin + icon_size,
             height - safe_margin,
         )
+        if supporting_blocks and y > icon_bounds[1] - max(12, height // 40):
+            raise TypographyRenderError("Typography text blocks cannot fit without clipping")
         self._draw_icon(image, icon_bounds, resolved_icon, accent_color)
         brand = "WEALTH DECODED"
         brand_box = draw.textbbox((0, 0), brand, font=brand_font)
@@ -142,7 +182,7 @@ class TypographyRenderer:
             width=width,
             height=height,
             primary_length=len(primary_text),
-            has_supporting=bool(supporting_text),
+            has_supporting=bool(supporting_blocks),
             has_label=bool(accent_label),
             duration=round(perf_counter() - started, 3),
             status="succeeded",
@@ -161,6 +201,8 @@ class TypographyRenderer:
             accent_bounds,
             icon_bounds,
             tuple(lines),
+            len(blocks),
+            tuple(blocks),
         )
 
     async def save(self, result: TypographyRenderResult, path: Path) -> str:

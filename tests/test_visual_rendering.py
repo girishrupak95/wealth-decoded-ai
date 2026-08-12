@@ -161,3 +161,26 @@ def test_previous_minimal_typography_call_remains_full_size_and_branded() -> Non
     assert result.brand_position[0] > 1920 // 2
     assert result.icon_bounds[0] >= result.safe_margin_pixels
     assert result.accent_bounds[0] >= result.safe_margin_pixels
+
+
+def test_ordered_multi_block_scene_preserves_every_block_at_full_size() -> None:
+    blocks = [
+        "Earn more.",
+        "Protect the gap.",
+        "Let consistent choices carry progress forward.",
+        "Follow Wealth Decoded.",
+        "Educational information only—not personal financial advice.",
+    ]
+
+    result = TypographyRenderer().render_blocks(blocks)
+    image = Image.open(io.BytesIO(result.content))
+
+    assert image.size == (1920, 1080)
+    assert result.text_blocks == tuple(blocks)
+    assert result.rendered_text_block_count == len(blocks)
+
+
+def test_multi_block_overflow_fails_without_dropping_text() -> None:
+    blocks = ["Headline", *("x" * 220 for _ in range(5))]
+    with pytest.raises(TypographyRenderError, match="exceeds"):
+        TypographyRenderer().render_blocks(blocks, width=640, height=360)

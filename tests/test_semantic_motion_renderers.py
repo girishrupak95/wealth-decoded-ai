@@ -8,6 +8,7 @@ from PIL import Image, ImageChops
 from shared.models.chart import ChartAnnotation, ChartSpec
 from shared.visual.chart_motion_renderer import ChartAnimationState, ChartMotionRenderer
 from shared.visual.financial_graphics_renderer import FinancialGraphicsRenderer
+from shared.visual.rendering import TypographyRenderer
 from shared.visual.typography_motion_renderer import (
     TypographyAnimationState,
     TypographyMotionRenderer,
@@ -139,6 +140,9 @@ def test_typography_blocks_reveal_in_order_and_final_is_deterministic() -> None:
     second = renderer.render(texts, TypographyAnimationState((1, 1, 0, 0)), width=640, height=360)
     final = renderer.render(texts, TypographyAnimationState((1, 1, 1, 1)), width=640, height=360)
     repeated = renderer.render(texts, TypographyAnimationState((1, 1, 1, 1)), width=640, height=360)
+    static_content = TypographyRenderer().render_blocks(texts, width=640, height=360).content
+    static = Image.open(io.BytesIO(static_content)).convert("RGB")
     assert difference(first, second) is not None
     assert difference(second, final) is not None
     assert difference(final, repeated) is None
+    assert difference(final, static) is None
