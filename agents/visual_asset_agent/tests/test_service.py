@@ -422,8 +422,39 @@ async def test_typography_and_chart_mappings_preserve_contracts() -> None:
     assert chart.metadata["generation_mode"] == "deterministic_chart"
     assert chart.metadata["source_references"] == []
     assert "Chart verification required." in result.manifest.warnings
-    assert "Chart source reference missing." in result.manifest.warnings
+    assert "Chart source reference missing." not in result.manifest.warnings
     text.render.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sourced_chart_without_reference_retains_missing_source_warning() -> None:
+    chart_scene = scene(
+        1,
+        VisualAssetType.CHART,
+        source_references=[],
+        chart_spec={
+            "chart_type": "line",
+            "purpose": "Show sourced financial change.",
+            "title": "Sourced progression",
+            "data_origin": "sourced",
+            "verification_required": True,
+            "series": [
+                {
+                    "series_id": "value",
+                    "label": "Value",
+                    "semantic_role": "primary",
+                    "value_format": {"format_type": "number"},
+                    "points": [{"label": "Current", "value": 1}],
+                }
+            ],
+        },
+    )
+
+    result = await service(MockImageProvider(), renderer()).generate(
+        review(), storyboard([chart_scene])
+    )
+
+    assert "Chart source reference missing." in result.manifest.warnings
 
 
 @pytest.mark.asyncio

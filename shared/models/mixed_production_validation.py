@@ -43,6 +43,12 @@ class MixedValidationScene(BaseModel):
     verification_required: bool = False
     deterministic_renderer: str | None = None
     on_screen_text_count: int = Field(default=0, ge=0)
+    source_width: int | None = Field(default=None, gt=0)
+    source_height: int | None = Field(default=None, gt=0)
+    final_width: int | None = Field(default=None, gt=0)
+    final_height: int | None = Field(default=None, gt=0)
+    frame_normalized: bool = False
+    normalization_mode: str | None = None
     error_message: str | None = None
 
 

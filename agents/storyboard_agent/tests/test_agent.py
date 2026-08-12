@@ -197,7 +197,8 @@ def make_agent(tmp_path: Path, response: str) -> tuple[StoryboardAgent, MockLLMC
         "Review: $script_review\n"
         "Duration: $expected_duration_seconds\n"
         "Sections: $valid_script_section_ids\n"
-        "$active_renderable_asset_types",
+        "$active_renderable_asset_types\n"
+        "$planning_constraints",
         encoding="utf-8",
     )
     knowledge_root = tmp_path / "knowledge"
@@ -258,6 +259,26 @@ async def test_approved_review_generates_validated_storyboard_and_prompt_context
         "framework",
         "action",
     ]
+    assert client.request.context["planning_constraints"] == ""
+
+
+@pytest.mark.asyncio
+async def test_optional_planning_constraints_are_forwarded_in_one_call(tmp_path: Path) -> None:
+    agent, client = make_agent(tmp_path, json.dumps(storyboard_payload()))
+
+    await agent.generate(
+        make_concept(),
+        make_script(),
+        make_review(),
+        planning_constraints="Fixture only: exactly five scenes and one chart.",
+    )
+
+    assert client.calls == 1
+    assert client.request is not None
+    assert (
+        client.request.context["planning_constraints"]
+        == "Fixture only: exactly five scenes and one chart."
+    )
 
 
 @pytest.mark.asyncio

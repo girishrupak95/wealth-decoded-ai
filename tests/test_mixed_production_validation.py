@@ -38,6 +38,10 @@ def load_cli() -> Any:
 cli = load_cli()
 
 
+def find_mixed_run(root: Path) -> Path:
+    return next(root.glob("*/salary-increase-mixed"))
+
+
 @pytest.fixture
 def repository_root() -> Path:
     return REPOSITORY_ROOT
@@ -359,7 +363,7 @@ async def test_partial_failure_preserves_assets_and_resume_only_retries_failure(
             mode=MixedValidationMode.DRY_RUN,
             narration=narration,
         )
-    run_directory = next((tmp_path / "2026-08-11").iterdir())
+    run_directory = find_mixed_run(tmp_path)
     persisted = MixedProductionValidationManifest.model_validate_json(
         (run_directory / "manifest.json").read_text()
     )

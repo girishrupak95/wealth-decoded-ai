@@ -32,7 +32,10 @@ from shared.models.chart import (
     ChartValueFormatType,
 )
 from shared.models.image_generation import ImageReferenceCapability, ImageReferenceInput
-from shared.models.mixed_production_validation import MixedValidationMode
+from shared.models.mixed_production_validation import (
+    MixedProductionValidationManifest,
+    MixedValidationMode,
+)
 from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.storyboard import Storyboard, StoryboardSummary, VisualAssetType
 from shared.models.video_concept import VideoConcept
@@ -57,6 +60,32 @@ from shared.visual.rendering import TypographyRenderer
 
 FIXTURE_DIRECTORY = Path("fixtures/illustrated-production-validation")
 OUTPUT_DIRECTORY = Path("generated/mixed-production-validation")
+CONTROLLED_DURATION_SECONDS = 55
+
+
+def controlled_planning_constraints() -> str:
+    """Return fixture-only constraints and authoritative hypothetical chart data."""
+    return """CONTROLLED MIXED STORYBOARD CONTRACT
+This is a controlled five-scene mixed-media validation.
+Return EXACTLY 5 scenes. Do not split narration into additional micro-scenes.
+There are exactly 5 narration sections. Return exactly one scene for each section,
+in order: section-1, section-2, section-3, section-4, section-5.
+Every section must appear exactly once. Do not create separate title or takeaway scenes.
+The storyboard must contain at least 2 ai_image scenes with IllustrationSpec,
+at least 1 chart scene with ChartSpec, and at least 1 typography scene.
+Use these strongly preferred controlled roles:
+- section-1: ai_image; SAVER_01 experiences higher income.
+- section-2: ai_image; SAVER_01 and a lifestyle-inflation metaphor.
+- section-3: chart; deterministic income, expenses, and protected-gap comparison.
+- section-4: ai_image; SAVER_01 redirects part of the increase.
+- section-5: typography; closing principle and CTA.
+Section 3 must use a hypothetical ChartSpec with this fixture-owned exact data:
+- Before Raise: Income 100, Expenses 85, Protected Gap 15.
+- After Raise: Income 120, Expenses 108, Protected Gap 12.
+Use data_origin=hypothetical. No external source is required.
+Do not place those exact values in any IllustrationSpec or ask image generation to draw them.
+The five scenes must be continuous from 0 through 55 seconds with no gaps or overlaps.
+No hidden retry or repair is available; the first structured result must satisfy this contract."""
 
 
 class DryRunImageProvider(ImageGenerationProvider):
@@ -130,6 +159,11 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument("--generate", action="store_true")
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--run-directory", type=Path)
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        help="Repair and validate an existing mixed package without provider calls.",
+    )
     return parser.parse_args(arguments)
 
 
@@ -157,7 +191,7 @@ def fixed_inputs(root: Path) -> tuple[VideoConcept, VideoScript, ScriptReview, s
         conclusion="Protect the gap deliberately.",
         cta="Follow Wealth Decoded.",
         disclaimer="Educational information only, not personal financial advice.",
-        total_estimated_duration_seconds=55,
+        total_estimated_duration_seconds=CONTROLLED_DURATION_SECONDS,
         estimated_word_count=len(narration.split()),
         verification_notes=[],
     )
@@ -271,6 +305,7 @@ def fixed_storyboard(root: Path) -> Storyboard:
     }
     for index, scene in enumerate(selected, 1):
         scene["sequence_number"] = index
+        scene["script_section_id"] = f"section-{index}"
     source["scenes"] = selected
     source["summary"] = StoryboardSummary(
         total_scenes=5,
@@ -339,7 +374,9 @@ def print_readiness(dependencies: Dependencies, mode: MixedValidationMode) -> No
         else "DRY RUN MIXED VALIDATION"
     )
     print(f"Topic: {VALIDATION_TOPIC}")
-    print(f"Storyboard target scene count: {VALIDATION_SCENE_COUNT}")
+    print(f"Storyboard target scene count: exactly {VALIDATION_SCENE_COUNT}")
+    print("Narration sections: 5")
+    print("Scene policy: one scene per section")
     print(
         "Expected storyboard LLM calls: 1"
         if mode == MixedValidationMode.GENERATE
@@ -348,12 +385,14 @@ def print_readiness(dependencies: Dependencies, mode: MixedValidationMode) -> No
     print(f"Required illustrated scenes: >={MINIMUM_ILLUSTRATED_SCENES}")
     print(f"Required chart scenes: >={MINIMUM_CHART_SCENES}")
     print(f"Required typography scenes: >={MINIMUM_TYPOGRAPHY_SCENES}")
+    print("Controlled quantitative section: section-3 -> deterministic ChartSpec")
     print(f"Maximum image scene requests: {MAXIMUM_IMAGE_REQUESTS}")
     print(f"Canonical SAVER_01 references: {', '.join(references) or 'None'}")
     print("Chart renderer: deterministic local")
     print("Typography renderer: deterministic local")
     print("Voiceover: disabled")
     print("FFmpeg: disabled")
+    print("Hidden retries: disabled")
     if warnings:
         print(f"Canonical reference warnings: {len(warnings)}")
 
@@ -365,6 +404,9 @@ async def async_main(
     dependencies: Dependencies | None = None,
 ) -> int:
     selected_root = root or Path.cwd()
+    if options.generate and options.resume is not None:
+        print("--generate and --resume cannot be used together.", file=sys.stderr)
+        return 1
     mode = MixedValidationMode.GENERATE if options.generate else MixedValidationMode.DRY_RUN
     active = dependencies or build_dependencies(
         selected_root,
@@ -374,7 +416,23 @@ async def async_main(
     try:
         print_readiness(active, mode)
         concept, script, review, narration = fixed_inputs(selected_root)
-        if options.generate:
+        if options.resume is not None:
+            run_directory = options.resume.resolve()
+            storyboard_path = run_directory / "storyboard" / "storyboard.json"
+            manifest_path = run_directory / "manifest.json"
+            if not storyboard_path.is_file() or not manifest_path.is_file():
+                raise MixedProductionValidationError(
+                    "Existing mixed package cannot be resumed safely."
+                )
+            storyboard = Storyboard.model_validate_json(storyboard_path.read_text())
+            previous = MixedProductionValidationManifest.model_validate_json(
+                manifest_path.read_text()
+            )
+            mode = previous.mode
+            print("Resume mode: local repair only")
+            print("Storyboard calls: 0")
+            print("Image-provider calls: 0")
+        elif options.generate:
             assert active.storyboard_agent is not None
             storyboard = await active.storyboard_agent.generate(
                 concept,
@@ -382,6 +440,7 @@ async def async_main(
                 review,
                 {VisualAssetType.AI_IMAGE, VisualAssetType.CHART, VisualAssetType.TYPOGRAPHY},
                 MAXIMUM_IMAGE_REQUESTS,
+                controlled_planning_constraints(),
             )
         else:
             storyboard = fixed_storyboard(selected_root)
@@ -390,7 +449,8 @@ async def async_main(
             review=review,
             mode=mode,
             narration=narration,
-            run_directory=options.run_directory,
+            run_directory=(options.resume or options.run_directory),
+            repair_only=options.resume is not None,
         )
         print(f"Validation status: {manifest.status.value}")
         print(f"Visual QA status: {qa.status.value}")

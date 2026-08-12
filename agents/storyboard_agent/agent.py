@@ -64,6 +64,7 @@ class StoryboardAgent(BaseAgent):
         review: ScriptReview,
         allowed_visual_asset_types: set[VisualAssetType] | None = None,
         max_ai_images: int | None = None,
+        planning_constraints: str | None = None,
     ) -> Storyboard:
         """Return a validated storyboard for an approved script review only."""
         if not review.approved:
@@ -78,6 +79,7 @@ class StoryboardAgent(BaseAgent):
                 review,
                 allowed_visual_asset_types,
                 max_ai_images,
+                planning_constraints,
             )
         )
         storyboard = Storyboard.model_validate(execution.output)

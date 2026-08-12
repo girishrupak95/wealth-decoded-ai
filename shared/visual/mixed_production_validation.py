@@ -23,6 +23,7 @@ from shared.visual.character_reference_selector import CharacterReferenceSelecto
 from shared.visual.chart_storyboard_validator import ChartStoryboardValidator
 from shared.visual.fonts import resolve_font_path
 from shared.visual.illustration_storyboard_planner import IllustrationStoryboardPlanner
+from shared.visual.image_frame_normalization import normalize_image_frame
 from shared.visual.processing import (
     allocate_output_directory,
     checksum_sha256,
@@ -37,6 +38,7 @@ MINIMUM_TYPOGRAPHY_SCENES = 1
 MAXIMUM_IMAGE_REQUESTS = 5
 EXPECTED_WIDTH = 1920
 EXPECTED_HEIGHT = 1080
+CONTROLLED_SECTION_IDS = tuple(f"section-{index}" for index in range(1, 6))
 
 
 class MixedProductionValidationError(ValueError):
@@ -81,6 +83,25 @@ class MixedProductionValidationService:
         if len(scenes) != VALIDATION_SCENE_COUNT:
             raise MixedReadinessError(
                 "mixed_scene_count_mismatch", "Mixed validation requires exactly five scenes."
+            )
+        section_ids = [scene.script_section_id for scene in scenes]
+        if tuple(section_ids) != CONTROLLED_SECTION_IDS:
+            raise MixedReadinessError(
+                "controlled_section_mapping_invalid",
+                "Controlled validation requires sections 1 through 5 exactly once and in order.",
+            )
+        expected_start = 0
+        for scene in scenes:
+            if scene.start_time_seconds != expected_start:
+                raise MixedReadinessError(
+                    "controlled_duration_invalid",
+                    "Controlled validation scenes must cover narration without gaps or overlaps.",
+                )
+            expected_start = scene.end_time_seconds
+        if expected_start != 55:
+            raise MixedReadinessError(
+                "controlled_duration_invalid",
+                "Controlled validation must cover the complete fixture duration.",
             )
         supported = {VisualAssetType.AI_IMAGE, VisualAssetType.CHART, VisualAssetType.TYPOGRAPHY}
         if any(scene.visual_asset_type not in supported for scene in scenes):
@@ -158,6 +179,7 @@ class MixedProductionValidationService:
         narration: str,
         created_at: datetime | None = None,
         run_directory: Path | None = None,
+        repair_only: bool = False,
     ) -> tuple[MixedProductionValidationManifest, VisualQaReport, Path]:
         timestamp = created_at or datetime.now(UTC)
         target = run_directory or await allocate_output_directory(
@@ -188,7 +210,7 @@ class MixedProductionValidationService:
                 "Mixed storyboard readiness validation failed."
             ) from error
 
-        existing = self._load_resumable_records(target, storyboard)
+        existing = await self._load_resumable_records(target, storyboard)
         pending = [scene for scene in storyboard.scenes if scene.scene_id not in existing]
         new_records: dict[str, MixedValidationScene] = {}
         request_count = (
@@ -198,6 +220,10 @@ class MixedProductionValidationService:
         )
         generation_warnings: list[str] = []
         if pending:
+            if repair_only:
+                raise MixedProductionValidationError(
+                    "Existing mixed package contains assets that cannot be repaired locally."
+                )
             result = await self._visual_service.generate(review, self._subset(storyboard, pending))
             generation_warnings.extend(result.manifest.warnings)
             for scene in pending:
@@ -251,13 +277,23 @@ class MixedProductionValidationService:
         asset_path: str | None = None
         checksum: str | None = None
         prompt_path: str | None = None
+        normalization = None
         if generated.prompt and scene.visual_asset_type == VisualAssetType.AI_IMAGE:
             prompt_file = root / "prompts" / f"scene-{scene.sequence_number:02d}.txt"
             await write_bytes_atomic(prompt_file, generated.prompt.encode("utf-8"))
             prompt_path = self._relative(root, prompt_file)
         if generated.status == VisualAssetStatus.GENERATED and generated.content:
             asset_file = root / "assets" / f"scene-{scene.sequence_number:02d}.png"
-            await write_bytes_atomic(asset_file, generated.content)
+            content = generated.content
+            if scene.visual_asset_type == VisualAssetType.AI_IMAGE:
+                normalization = normalize_image_frame(
+                    content, width=EXPECTED_WIDTH, height=EXPECTED_HEIGHT
+                )
+                if normalization.frame_normalized:
+                    raw_file = root / "provider" / "raw" / asset_file.name
+                    await write_bytes_atomic(raw_file, content)
+                content = normalization.content
+            await write_bytes_atomic(asset_file, content)
             asset_path = self._relative(root, asset_file)
             checksum = checksum_sha256(asset_file)
         metadata = generated.metadata
@@ -292,10 +328,16 @@ class MixedProductionValidationService:
                 else "typography" if scene.visual_asset_type == VisualAssetType.TYPOGRAPHY else None
             ),
             on_screen_text_count=len(scene.on_screen_text),
+            source_width=(normalization.source_width if normalization else generated.width),
+            source_height=(normalization.source_height if normalization else generated.height),
+            final_width=(normalization.final_width if normalization else generated.width),
+            final_height=(normalization.final_height if normalization else generated.height),
+            frame_normalized=(normalization.frame_normalized if normalization else False),
+            normalization_mode=(normalization.normalization_mode if normalization else None),
             error_message=generated.error_message,
         )
 
-    def _load_resumable_records(
+    async def _load_resumable_records(
         self, root: Path, storyboard: Storyboard
     ) -> dict[str, MixedValidationScene]:
         path = root / "manifest.json"
@@ -315,6 +357,29 @@ class MixedProductionValidationService:
                 continue
             asset = root / record.asset_path
             if self._valid_png(asset, record.asset_checksum):
+                if scene.visual_asset_type == VisualAssetType.AI_IMAGE:
+                    original = asset.read_bytes()
+                    normalized = normalize_image_frame(
+                        original, width=EXPECTED_WIDTH, height=EXPECTED_HEIGHT
+                    )
+                    if normalized.frame_normalized:
+                        raw_file = root / "provider" / "raw" / asset.name
+                        if not raw_file.exists():
+                            await write_bytes_atomic(raw_file, original)
+                        await write_bytes_atomic(asset, normalized.content)
+                    updates: dict[str, object] = {"asset_checksum": checksum_sha256(asset)}
+                    if normalized.frame_normalized or not record.frame_normalized:
+                        updates.update(
+                            {
+                                "source_width": normalized.source_width,
+                                "source_height": normalized.source_height,
+                                "final_width": normalized.final_width,
+                                "final_height": normalized.final_height,
+                                "frame_normalized": normalized.frame_normalized,
+                                "normalization_mode": normalized.normalization_mode,
+                            }
+                        )
+                    record = record.model_copy(update=updates)
                 records[record.scene_id] = record
         return records
 

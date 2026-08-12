@@ -17,6 +17,7 @@ from shared.constants import (
     VISUAL_ASSETS_FAILED_WARNING,
 )
 from shared.exceptions.ai import ScriptReviewNotApprovedError, VisualProviderUnavailableError
+from shared.models.chart import ChartDataOrigin
 from shared.models.illustration import IllustrationSceneType, IllustrationSpec
 from shared.models.image_generation import (
     ImageReferenceCapability,
@@ -666,7 +667,12 @@ class VisualAssetGenerationService:
         warnings: list[str] = []
         if scene.verification_required:
             warnings.append("Verification required.")
-        if scene.visual_asset_type == VisualAssetType.CHART and not scene.source_references:
+        if (
+            scene.visual_asset_type == VisualAssetType.CHART
+            and scene.chart_spec is not None
+            and scene.chart_spec.data_origin == ChartDataOrigin.SOURCED
+            and not scene.source_references
+        ):
             warnings.append("Chart source reference is missing.")
         if scene.visual_asset_type == VisualAssetType.SCREENSHOT and not scene.source_references:
             warnings.append("Screenshot source reference is missing.")
@@ -679,7 +685,12 @@ class VisualAssetGenerationService:
         ]
         if any(scene.verification_required for scene in chart_scenes):
             warnings.append(CHART_VERIFICATION_REQUIRED_WARNING)
-        if any(not scene.source_references for scene in chart_scenes):
+        if any(
+            scene.chart_spec is not None
+            and scene.chart_spec.data_origin == ChartDataOrigin.SOURCED
+            and not scene.source_references
+            for scene in chart_scenes
+        ):
             warnings.append(CHART_SOURCE_REFERENCE_MISSING_WARNING)
 
     @staticmethod

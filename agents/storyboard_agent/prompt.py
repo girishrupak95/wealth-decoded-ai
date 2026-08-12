@@ -14,6 +14,7 @@ def build_storyboard_request(
     review: ScriptReview,
     allowed_visual_asset_types: set[VisualAssetType] | None = None,
     max_ai_images: int | None = None,
+    planning_constraints: str | None = None,
 ) -> AgentRequest:
     """Build a provider-neutral storyboard planning request."""
     return AgentRequest(
@@ -28,6 +29,7 @@ def build_storyboard_request(
             "active_renderable_asset_types": _renderable_asset_guidance(
                 allowed_visual_asset_types, max_ai_images
             ),
+            "planning_constraints": planning_constraints or "",
         },
     )
 

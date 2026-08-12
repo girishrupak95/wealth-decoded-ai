@@ -26,13 +26,16 @@ def test_parse_arguments_defaults_to_dry_run() -> None:
     options = cli.parse_arguments([])
     assert options.generate is False
     assert options.run_directory is None
+    assert options.resume is None
 
 
 @pytest.mark.asyncio
 async def test_dry_cli_uses_no_live_storyboard_call(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    options = argparse.Namespace(generate=False, output_root=tmp_path, run_directory=None)
+    options = argparse.Namespace(
+        generate=False, output_root=tmp_path, run_directory=None, resume=None
+    )
 
     result = await cli.async_main(options, root=REPOSITORY_ROOT)
 
