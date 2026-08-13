@@ -9,6 +9,7 @@ from pathlib import Path
 from app.config.settings import FFmpegRenderSettings
 from shared.models.compiled_motion import CompiledMotionPlan
 from shared.models.storyboard import VisualAssetType
+from shared.rendering.ffprobe import FFprobeAdapter
 from shared.visual.motion_preview_renderer import LocalMotionPreviewRenderer
 from shared.visual.production_motion_renderer import (
     PRODUCTION_FPS,
@@ -41,11 +42,16 @@ async def async_main(options: argparse.Namespace) -> int:
     try:
         compiled = CompiledMotionPlan.model_validate_json(options.compiled_motion.read_text())
         approval = VisualPackageApprovalService(Path("generated/approved-visual-packages"))
-        executable = FFmpegRenderSettings().ffmpeg_executable
+        settings = FFmpegRenderSettings()
+        executable = settings.ffmpeg_executable
         encoder = FFmpegProductionEncoder(executable)
         frame_renderer = LocalMotionPreviewRenderer(approval, encoder)
         renderer = ProductionMotionRenderer(
-            approval, frame_renderer, encoder, FFmpegConcatAssembler(executable)
+            approval,
+            frame_renderer,
+            encoder,
+            FFmpegConcatAssembler(executable),
+            FFprobeAdapter(settings.ffprobe_executable),
         )
         storyboard, _ = renderer.preflight(compiled, options.approved_package)
         print("PRODUCTION MOTION RENDER PREFLIGHT")
@@ -76,8 +82,8 @@ async def async_main(options: argparse.Namespace) -> int:
         )
         print(f"Output: {directory / manifest.final.path}")
         return 0
-    except (OSError, ValueError, ProductionMotionError):
-        print("Silent production motion render failed safely.", file=sys.stderr)
+    except (OSError, ValueError, ProductionMotionError) as error:
+        print(f"Silent production motion render failed safely: {error}", file=sys.stderr)
         return 1
 
 

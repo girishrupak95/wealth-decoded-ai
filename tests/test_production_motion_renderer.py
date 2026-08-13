@@ -5,9 +5,12 @@ from pathlib import Path
 import pytest
 
 from shared.visual.production_motion_renderer import (
+    DIAGNOSTIC_LIMIT,
     PRODUCTION_HEIGHT,
     PRODUCTION_WIDTH,
     ProductionMotionError,
+    bounded_diagnostic,
+    concat_path,
     quantize_scene_frames,
     seconds_to_frames,
 )
@@ -41,3 +44,17 @@ def test_production_dimensions_are_full_hd() -> None:
 
 def test_no_production_output_created_by_unit_tests(tmp_path: Path) -> None:
     assert not list(tmp_path.iterdir())
+
+
+def test_concat_path_is_absolute_and_escapes_spaces_and_quotes(tmp_path: Path) -> None:
+    clip = tmp_path / "scene clips" / "owner's scene.mp4"
+    formatted = concat_path(clip)
+    assert formatted.startswith("'/")
+    assert "scene clips" in formatted
+    assert "owner'\\''s scene.mp4" in formatted
+
+
+def test_ffmpeg_diagnostic_is_sanitized_and_bounded() -> None:
+    diagnostic = bounded_diagnostic(("secret\n" + "x" * 5000).encode())
+    assert "\n" not in diagnostic
+    assert len(diagnostic) <= DIAGNOSTIC_LIMIT

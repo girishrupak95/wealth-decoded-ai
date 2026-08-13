@@ -1,8 +1,11 @@
 """CLI option tests for silent production motion rendering."""
 
+import argparse
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,3 +28,24 @@ def test_cli_defaults_and_dry_run() -> None:
     assert options.dry_run
     assert options.resume is None
     assert options.overwrite is False
+
+
+@pytest.mark.asyncio
+async def test_cli_surfaces_safe_failure_reason(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = Path("missing-compiled-motion.json")
+    result = await cli.async_main(
+        argparse.Namespace(
+            compiled_motion=missing,
+            approved_package=Path("approved"),
+            dry_run=False,
+            resume=None,
+            fps=30,
+            output_root=Path("output"),
+            keep_temp=False,
+            overwrite=False,
+        )
+    )
+    assert result == 1
+    assert "failed safely:" in capsys.readouterr().err

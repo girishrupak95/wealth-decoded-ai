@@ -27,6 +27,7 @@ PRODUCTION_HEIGHT = 1080
 PRODUCTION_FPS = 30
 PRODUCTION_CRF = 19
 PRODUCTION_PRESET = "medium"
+DIAGNOSTIC_LIMIT = 3000
 
 
 class ProductionMotionError(ValueError):
@@ -35,6 +36,22 @@ class ProductionMotionError(ValueError):
 
 class FinalAssembler(Protocol):
     async def assemble(self, clips: list[Path], output: Path, *, fps: int) -> None: ...
+
+
+class MediaProbe(Protocol):
+    async def probe(self, path: Path) -> dict[str, object]: ...
+
+
+def bounded_diagnostic(stderr: bytes) -> str:
+    """Return a bounded single diagnostic without control-character log noise."""
+    decoded = stderr.decode("utf-8", errors="replace")[-DIAGNOSTIC_LIMIT:]
+    return " ".join(decoded.split()) or "no FFmpeg diagnostic available"
+
+
+def concat_path(path: Path) -> str:
+    """Format one absolute path using FFmpeg concat-demuxer quoting rules."""
+    resolved = path.resolve().as_posix()
+    return "'" + resolved.replace("'", "'\\''") + "'"
 
 
 class FFmpegProductionEncoder:
@@ -70,9 +87,11 @@ class FFmpegProductionEncoder:
         process = await asyncio.create_subprocess_exec(
             *arguments, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
         )
-        await process.communicate()
+        _, stderr = await process.communicate()
         if process.returncode != 0:
-            raise ProductionMotionError("Production scene encoding failed.")
+            raise ProductionMotionError(
+                f"Production scene encoding failed: {bounded_diagnostic(stderr)}"
+            )
 
 
 class FFmpegConcatAssembler:
@@ -85,7 +104,7 @@ class FFmpegConcatAssembler:
         del fps
         with tempfile.TemporaryDirectory(prefix="production-assembly-") as temporary:
             listing = Path(temporary) / "clips.txt"
-            listing.write_text("".join(f"file '{path.as_posix()}'\n" for path in clips))
+            listing.write_text("".join(f"file {concat_path(path)}\n" for path in clips))
             process = await asyncio.create_subprocess_exec(
                 self._executable,
                 "-hide_banner",
@@ -107,9 +126,11 @@ class FFmpegConcatAssembler:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await process.communicate()
+            _, stderr = await process.communicate()
             if process.returncode != 0:
-                raise ProductionMotionError("Silent production assembly failed.")
+                raise ProductionMotionError(
+                    f"Silent production assembly failed: {bounded_diagnostic(stderr)}"
+                )
 
 
 def seconds_to_frames(duration_seconds: float, fps: int) -> int:
@@ -141,11 +162,13 @@ class ProductionMotionRenderer:
         frame_renderer: LocalMotionPreviewRenderer,
         encoder: PreviewEncoder,
         assembler: FinalAssembler,
+        probe: MediaProbe,
     ) -> None:
         self._approval = approval
         self._frames = frame_renderer
         self._encoder = encoder
         self._assembler = assembler
+        self._probe = probe
 
     def preflight(
         self, compiled: CompiledMotionPlan, approved_package: Path
@@ -207,6 +230,15 @@ class ProductionMotionRenderer:
                 and clip.is_file()
                 and checksum_sha256(clip) == old.clip_checksum
             )
+            reuse_reason = "validated_manifest_scene_clip" if reusable else None
+            if not reusable and prior is None and clip.is_file():
+                reusable = await self._valid_media(
+                    clip,
+                    fps=fps,
+                    duration_seconds=frame_count / fps,
+                )
+                if reusable:
+                    reuse_reason = "validated_orphan_scene_clip"
             if not reusable:
                 clip.parent.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(prefix="production-motion-") as temporary:
@@ -272,6 +304,7 @@ class ProductionMotionRenderer:
                     clip_path=clip.relative_to(destination),
                     clip_checksum=checksum_sha256(clip),
                     reused=reusable,
+                    reuse_reason=reuse_reason,
                     rendered_motion_types=rendered,
                     deferred_motion_types=deferred,
                     warnings=warnings,
@@ -294,6 +327,8 @@ class ProductionMotionRenderer:
         rendered_duration = sum(item.frame_count for item in records) / fps
         if abs(rendered_duration - compiled.total_duration_seconds) > 1 / fps:
             raise ProductionMotionError("Rendered duration exceeds one-frame tolerance.")
+        if not await self._valid_media(final_path, fps=fps, duration_seconds=rendered_duration):
+            raise ProductionMotionError("Silent production final QA failed.")
         manifest = ProductionMotionManifest(
             package_id=compiled.package_id,
             approved_package_checksum=package_checksum,
@@ -315,6 +350,29 @@ class ProductionMotionRenderer:
             json.dumps(manifest.model_dump(mode="json"), indent=2).encode(),
         )
         return manifest, destination
+
+    async def _valid_media(self, path: Path, *, fps: int, duration_seconds: float) -> bool:
+        try:
+            metadata = await self._probe.probe(path)
+            return (
+                metadata.get("video_codec") == "h264"
+                and metadata.get("pixel_format") == "yuv420p"
+                and metadata.get("audio_codec") == ""
+                and metadata.get("width") == PRODUCTION_WIDTH
+                and metadata.get("height") == PRODUCTION_HEIGHT
+                and abs(self._number(metadata.get("frame_rate")) - fps) < 1e-6
+                and abs(self._number(metadata.get("duration_seconds")) - duration_seconds)
+                <= 1 / fps
+                and self._number(metadata.get("file_size_bytes")) > 0
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _number(value: object) -> float:
+        if isinstance(value, (str, int, float)):
+            return float(value)
+        raise TypeError("media metadata is not numeric")
 
     @staticmethod
     def _motion_status(scene: CompiledSceneMotion) -> tuple[list[str], list[str], list[str]]:

@@ -80,6 +80,7 @@ def _normalize(payload: dict[str, Any], path: Path) -> dict[str, object]:
         "height": height,
         "frame_rate": _frame_rate(str(video.get("r_frame_rate", "0"))),
         "video_codec": str(video.get("codec_name", "")),
+        "pixel_format": str(video.get("pix_fmt", "")),
         "audio_codec": str(audio.get("codec_name", "")),
         "sample_rate_hz": _optional_int(audio.get("sample_rate")),
         "format_name": str(format_data.get("format_name", "")),

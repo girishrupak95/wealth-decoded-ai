@@ -19,6 +19,7 @@ class ProductionMotionScene(BaseModel):
     clip_path: Path
     clip_checksum: str
     reused: bool = False
+    reuse_reason: str | None = None
     rendered_motion_types: list[str] = Field(default_factory=list)
     deferred_motion_types: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
