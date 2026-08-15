@@ -1,0 +1,392 @@
+"""Deterministic tests for the first real full-episode content contract."""
+
+import importlib
+import re
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from pytest import CaptureFixture
+
+from shared.content.full_episode import (
+    EXPECTED_PROVIDER_CALLS,
+    FullEpisodeContentError,
+    FullEpisodeContentInput,
+    FullEpisodeContentService,
+    ShortContentInput,
+)
+from shared.models.research import ResearchPackage
+from shared.models.script_review import ReviewScores, ScriptReview
+from shared.models.storyboard import (
+    CameraDirection,
+    Storyboard,
+    StoryboardScene,
+    StoryboardSummary,
+    VisualAssetType,
+)
+from shared.models.topic import TopicCandidate
+from shared.models.video_concept import VideoConcept
+from shared.models.video_script import ScriptSection, VideoScript
+
+cli = importlib.import_module("apps.api.scripts.run_full_episode_content")
+
+
+def words(count: int, token: str = "word") -> str:
+    return " ".join(f"{token}{index}" for index in range(count))
+
+
+def script(title: str, count: int) -> VideoScript:
+    fixed = 40
+    per_section, remainder = divmod(count - fixed, 3)
+    title_token = re.sub(r"[^a-z]", "", title.casefold())
+    sections = [
+        ScriptSection(
+            section_id=f"section-{index + 1}",
+            heading=f"Insight {index + 1}",
+            narration=words(per_section + (1 if index < remainder else 0), f"s{index}"),
+            estimated_duration_seconds=90,
+            visual_direction="Editorial metaphor",
+            on_screen_text=[],
+            source_references=["https://example.org/research"],
+            verification_required=False,
+        )
+        for index in range(3)
+    ]
+    return VideoScript(
+        title=title,
+        hook=words(10, f"{title_token}hook"),
+        intro=words(10, "intro"),
+        sections=sections,
+        conclusion=words(10, "close"),
+        cta=words(5, "cta"),
+        disclaimer=words(5, "disclaimer"),
+        total_estimated_duration_seconds=1,
+        estimated_word_count=1,
+        verification_notes=[],
+    )
+
+
+def review(value: VideoScript, approved: bool = True) -> ScriptReview:
+    return ScriptReview(
+        script_title=value.title,
+        approved=approved,
+        scores=ReviewScores(
+            hook_score=9,
+            accuracy_score=9,
+            structure_score=9,
+            retention_score=9,
+            clarity_score=9,
+            tone_score=9,
+            compliance_score=9,
+            overall_score=9,
+        ),
+        findings=[],
+        revision_summary="Ready" if approved else "Revise",
+        required_changes=[] if approved else ["Revise the script."],
+        optional_improvements=[],
+        reviewed_at=datetime.now(UTC),
+        reviewer_version="1.0",
+    )
+
+
+def storyboard(title: str, count: int, duration: int, aspect_ratio: str) -> Storyboard:
+    base, remainder = divmod(duration, count)
+    cursor = 0
+    scenes = []
+    for index in range(count):
+        scene_duration = base + (1 if index < remainder else 0)
+        visual_type = (
+            (
+                VisualAssetType.MOTION_GRAPHIC,
+                VisualAssetType.TYPOGRAPHY,
+                VisualAssetType.AI_IMAGE,
+            )[index % 3]
+            if aspect_ratio == "16:9"
+            else VisualAssetType.MOTION_GRAPHIC
+        )
+        scenes.append(
+            StoryboardScene(
+                scene_id=f"scene-{index + 1}",
+                script_section_id=f"section-{index % 3 + 1}",
+                sequence_number=index + 1,
+                start_time_seconds=cursor,
+                end_time_seconds=cursor + scene_duration,
+                narration_excerpt="A sourced financial idea.",
+                visual_asset_type=visual_type,
+                visual_description="A calm deterministic editorial composition.",
+                generation_prompt=(
+                    "A premium illustrated editorial finance scene."
+                    if visual_type == VisualAssetType.AI_IMAGE
+                    else None
+                ),
+                stock_search_terms=[],
+                camera_direction=CameraDirection.STATIC,
+                on_screen_text=[],
+                transition_in="cut",
+                transition_out="cut",
+                sound_effects=[],
+                music_direction="calm",
+                source_references=["https://example.org/research"],
+                verification_required=False,
+                production_notes=[],
+            )
+        )
+        cursor += scene_duration
+    return Storyboard(
+        title=title,
+        visual_style="Premium illustrated editorial finance",
+        aspect_ratio=aspect_ratio,
+        resolution="1080x1920" if aspect_ratio == "9:16" else "1920x1080",
+        frame_rate=30,
+        scenes=scenes,
+        summary=StoryboardSummary(
+            total_scenes=count,
+            total_duration_seconds=duration,
+            ai_image_count=sum(
+                scene.visual_asset_type == VisualAssetType.AI_IMAGE for scene in scenes
+            ),
+            ai_video_count=0,
+            stock_video_count=0,
+            stock_image_count=0,
+            motion_graphic_count=sum(
+                scene.visual_asset_type == VisualAssetType.MOTION_GRAPHIC for scene in scenes
+            ),
+            chart_count=0,
+            typography_count=sum(
+                scene.visual_asset_type == VisualAssetType.TYPOGRAPHY for scene in scenes
+            ),
+            screenshot_count=0,
+            screen_recording_count=0,
+            estimated_ai_generation_count=sum(
+                scene.visual_asset_type == VisualAssetType.AI_IMAGE for scene in scenes
+            ),
+        ),
+        production_warnings=[],
+        generated_at=datetime.now(UTC),
+        storyboard_version="1.0",
+    )
+
+
+def content() -> FullEpisodeContentInput:
+    long_script = script("A Real Episode", 700)
+    short_one = script("Surprising Short", 90)
+    short_two = script("Practical Short", 95)
+    return FullEpisodeContentInput(
+        topic=TopicCandidate(
+            title="A Real Episode",
+            description="A focused evergreen lesson.",
+            keywords=["money psychology"],
+            source="topic-agent",
+            category="Personal Finance",
+            evergreen_score=9,
+            ctr_score=7,
+            competition_score=6,
+            monetization_score=7,
+            overall_score=8,
+            reason="Supports a central question and two distinct sub-ideas.",
+        ),
+        concept=VideoConcept(
+            title="A Real Episode",
+            hook="A contradiction",
+            thumbnail_text="Think Again",
+            content_pillar="Money psychology",
+            target_audience="Young professionals",
+            estimated_duration_minutes=5,
+            why_it_works="It combines mechanism, behavior, and action.",
+            research_questions=["Why does this happen?"],
+            keywords=["money psychology"],
+            difficulty="beginner",
+        ),
+        research=ResearchPackage(
+            title="A Real Episode",
+            executive_summary="A sourced explanation.",
+            key_facts=["A mechanism.", "A behavioral finding.", "A practical implication."],
+            statistics=[],
+            supporting_examples=["A practical example."],
+            counter_arguments=["An important qualification."],
+            research_questions=["Why does this happen?"],
+            references=["https://example.org/research"],
+            story_outline=["Hook", "Mechanism", "Action"],
+            confidence_score=0.9,
+        ),
+        script=long_script,
+        review=review(long_script),
+        storyboard=storyboard(long_script.title, 29, 290, "16:9"),
+        shorts=(
+            ShortContentInput(
+                script=short_one,
+                review=review(short_one),
+                storyboard=storyboard(short_one.title, 6, 37, "9:16"),
+                core_insight="The counterintuitive mechanism",
+                payoff="A new way to see the decision",
+                source_section_ids=("section-1",),
+            ),
+            ShortContentInput(
+                script=short_two,
+                review=review(short_two),
+                storyboard=storyboard(short_two.title, 6, 39, "9:16"),
+                core_insight="The practical behavior",
+                payoff="One sustainable action",
+                source_section_ids=("section-2", "section-3"),
+            ),
+        ),
+    )
+
+
+def test_full_length_targets_and_realistic_scene_density_pass() -> None:
+    FullEpisodeContentService().validate(content())
+
+
+@pytest.mark.parametrize("count", [649, 801])
+def test_long_form_word_count_is_bounded(count: int) -> None:
+    package = content()
+    bad_script = script("Bad", count)
+    package = FullEpisodeContentInput(
+        **{**package.__dict__, "script": bad_script, "review": review(bad_script)}
+    )
+    with pytest.raises(FullEpisodeContentError, match="word count"):
+        FullEpisodeContentService().validate(package)
+
+
+def test_exactly_two_shorts_are_required() -> None:
+    package = content()
+    changed = FullEpisodeContentInput(**{**package.__dict__, "shorts": (package.shorts[0],)})
+    with pytest.raises(FullEpisodeContentError, match="Exactly two"):
+        FullEpisodeContentService().validate(changed)
+
+
+@pytest.mark.parametrize("count", [69, 121])
+def test_short_word_count_is_bounded(count: int) -> None:
+    package = content()
+    bad_script = script("Bad Short", count)
+    bad = ShortContentInput(
+        **{
+            **package.shorts[0].__dict__,
+            "script": bad_script,
+            "review": review(bad_script),
+        }
+    )
+    changed = FullEpisodeContentInput(**{**package.__dict__, "shorts": (bad, package.shorts[1])})
+    with pytest.raises(FullEpisodeContentError, match="word count"):
+        FullEpisodeContentService().validate(changed)
+
+
+def test_short_duration_and_vertical_format_are_required() -> None:
+    package = content()
+    bad_script = script("Too Long", 120).model_copy(update={"total_estimated_duration_seconds": 50})
+    bad = ShortContentInput(
+        **{
+            **package.shorts[0].__dict__,
+            "script": bad_script,
+            "review": review(bad_script),
+            "storyboard": storyboard("Too Long", 6, 45, "16:9"),
+        }
+    )
+    changed = FullEpisodeContentInput(**{**package.__dict__, "shorts": (bad, package.shorts[1])})
+    with pytest.raises(FullEpisodeContentError, match="duration"):
+        FullEpisodeContentService().validate(changed)
+
+    vertical_script = package.shorts[0].script
+    wrong_ratio = ShortContentInput(
+        **{
+            **package.shorts[0].__dict__,
+            "storyboard": storyboard(vertical_script.title, 6, 37, "16:9"),
+        }
+    )
+    changed = FullEpisodeContentInput(
+        **{**package.__dict__, "shorts": (wrong_ratio, package.shorts[1])}
+    )
+    with pytest.raises(FullEpisodeContentError, match="aspect ratio"):
+        FullEpisodeContentService().validate(changed)
+
+
+def test_short_provenance_must_bind_existing_sections() -> None:
+    package = content()
+    bad = ShortContentInput(**{**package.shorts[0].__dict__, "source_section_ids": ("missing",)})
+    changed = FullEpisodeContentInput(**{**package.__dict__, "shorts": (bad, package.shorts[1])})
+    with pytest.raises(FullEpisodeContentError, match="provenance"):
+        FullEpisodeContentService().validate(changed)
+
+
+@pytest.mark.parametrize("field", ["hook", "core_insight", "payoff"])
+def test_short_editorial_ideas_must_be_distinct(field: str) -> None:
+    package = content()
+    second = package.shorts[1]
+    if field == "hook":
+        duplicate_script = second.script.model_copy(update={"hook": package.shorts[0].script.hook})
+        second = ShortContentInput(
+            **{**second.__dict__, "script": duplicate_script, "review": review(duplicate_script)}
+        )
+    else:
+        second = ShortContentInput(**{**second.__dict__, field: getattr(package.shorts[0], field)})
+    changed = FullEpisodeContentInput(**{**package.__dict__, "shorts": (package.shorts[0], second)})
+    with pytest.raises(FullEpisodeContentError, match="must be distinct"):
+        FullEpisodeContentService().validate(changed)
+
+
+def test_research_provenance_and_approved_review_are_required() -> None:
+    package = content()
+    no_references = package.research.model_copy(update={"references": []})
+    with pytest.raises(FullEpisodeContentError, match="research provenance"):
+        FullEpisodeContentService().validate(
+            FullEpisodeContentInput(**{**package.__dict__, "research": no_references})
+        )
+    with pytest.raises(FullEpisodeContentError, match="approved script review"):
+        FullEpisodeContentService().validate(
+            FullEpisodeContentInput(
+                **{**package.__dict__, "review": review(package.script, approved=False)}
+            )
+        )
+
+
+def test_exact_number_requires_deterministic_chart_treatment() -> None:
+    package = content()
+    scenes = list(package.storyboard.scenes)
+    scenes[0] = scenes[0].model_copy(update={"on_screen_text": ["Returns: 8%"]})
+    changed_storyboard = package.storyboard.model_copy(update={"scenes": scenes})
+    with pytest.raises(FullEpisodeContentError, match="deterministic chart"):
+        FullEpisodeContentService().validate(
+            FullEpisodeContentInput(**{**package.__dict__, "storyboard": changed_storyboard})
+        )
+
+
+@pytest.mark.asyncio
+async def test_persisted_package_is_review_required_checksum_bound_and_media_free(
+    tmp_path: Path,
+) -> None:
+    manifest = await FullEpisodeContentService().persist(
+        content(), output_directory=tmp_path, package_id="real-episode-001", provider_call_count=12
+    )
+    assert manifest.approval_status == "review_required"
+    assert len(manifest.shorts) == 2
+    assert manifest.shorts[0].aspect_ratio == "9:16"
+    assert manifest.shorts[0].provenance.source_research_checksum == manifest.research_checksum
+    assert not manifest.media_generation_enabled
+    assert not manifest.voice_generation_enabled
+    assert not manifest.image_generation_enabled
+    assert not manifest.render_enabled
+    assert (tmp_path / "manifest.json").is_file()
+    assert (tmp_path / "approval.md").is_file()
+    assert not any(
+        path.suffix in {".mp3", ".mp4", ".png"}
+        for path in tmp_path.rglob("*")  # noqa: ASYNC240 - completed persistence inspection.
+    )
+    resumed = cli.load_resume(tmp_path)
+    assert resumed == manifest
+
+
+@pytest.mark.asyncio
+async def test_dry_run_and_default_mode_make_zero_provider_calls(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    assert await cli.async_main(cli.parse_arguments(["--dry-run"]), root=tmp_path) == 0
+    output = capsys.readouterr().out
+    assert f"Provider calls required: {EXPECTED_PROVIDER_CALLS}" in output
+    assert "Provider execution: disabled" in output
+    assert not (tmp_path / "generated").exists()
+
+
+def test_validation_fixture_is_not_the_real_episode_output() -> None:
+    options = cli.parse_arguments([])
+    assert str(options.output_root) == "generated/content-packages"
+    assert "salary-increase" not in str(options.output_root)
