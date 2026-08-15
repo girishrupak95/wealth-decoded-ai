@@ -84,9 +84,16 @@ class ElevenLabsSettings(BaseSettings):
 class ElevenLabsTextToSpeechProvider(TextToSpeechProvider):
     """Async ElevenLabs adapter with bounded retries and secret-safe logging."""
 
-    def __init__(self, settings: ElevenLabsSettings, client: AsyncElevenLabs | None = None) -> None:
+    def __init__(
+        self,
+        settings: ElevenLabsSettings,
+        client: AsyncElevenLabs | None = None,
+        *,
+        max_retries: int = DEFAULT_TTS_MAX_RETRIES,
+    ) -> None:
         self._settings = settings
         self._client = client or AsyncElevenLabs(api_key=settings.api_key.get_secret_value())
+        self._max_retries = max_retries
         self._logger = logger.bind(component=self.__class__.__name__, provider="elevenlabs")
 
     async def synthesize(
@@ -103,7 +110,7 @@ class ElevenLabsTextToSpeechProvider(TextToSpeechProvider):
         safe_logger = self._logger.bind(
             character_count=len(text), model_id=model_id, voice_id_suffix=voice_id[-4:]
         )
-        for attempt in range(DEFAULT_TTS_MAX_RETRIES + 1):
+        for attempt in range(self._max_retries + 1):
             try:
                 response = self._client.text_to_speech.convert(
                     voice_id=voice_id,
@@ -124,7 +131,7 @@ class ElevenLabsTextToSpeechProvider(TextToSpeechProvider):
             except VoiceoverProviderError:
                 raise
             except Exception as error:
-                if attempt >= DEFAULT_TTS_MAX_RETRIES or not self._is_transient(error):
+                if attempt >= self._max_retries or not self._is_transient(error):
                     safe_logger.error(
                         "tts_synthesis_failed",
                         duration=round(perf_counter() - started, 3),
