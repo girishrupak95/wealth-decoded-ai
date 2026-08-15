@@ -1,10 +1,78 @@
 """Contracts for one review-gated long-form episode and its two Shorts."""
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field, model_validator
 
 from shared.models.base import BaseModel
+
+
+class ContentRunStage(StrEnum):
+    """Ordered provider stages in a full-episode content run."""
+
+    TOPIC = "topic"
+    CONCEPT = "concept"
+    RESEARCH = "research"
+    LONG_SCRIPT = "long_form_script"
+    LONG_REVIEW = "long_form_review"
+    LONG_STORYBOARD = "long_form_storyboard"
+    SHORT_01_SCRIPT = "short_01_script"
+    SHORT_01_REVIEW = "short_01_review"
+    SHORT_01_STORYBOARD = "short_01_storyboard"
+    SHORT_02_SCRIPT = "short_02_script"
+    SHORT_02_REVIEW = "short_02_review"
+    SHORT_02_STORYBOARD = "short_02_storyboard"
+
+
+class ContentRunStatus(StrEnum):
+    """Safe lifecycle states for incomplete and promoted content runs."""
+
+    IN_PROGRESS = "in_progress"
+    REVIEW_REJECTED = "review_rejected"
+    READY_TO_CONTINUE = "ready_to_continue"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+
+class ContentRunCheckpoint(BaseModel):
+    """Checksum-bound state for resumable provider-stage execution."""
+
+    run_id: str = Field(min_length=1)
+    topic_slug: str = Field(min_length=1)
+    current_stage: ContentRunStage
+    status: ContentRunStatus = ContentRunStatus.IN_PROGRESS
+    completed_stages: list[ContentRunStage] = Field(default_factory=list)
+    topic_checksum: str | None = None
+    concept_checksum: str | None = None
+    research_checksum: str | None = None
+    long_script_checksum: str | None = None
+    long_review_checksum: str | None = None
+    long_storyboard_checksum: str | None = None
+    short_01_script_checksum: str | None = None
+    short_01_review_checksum: str | None = None
+    short_01_storyboard_checksum: str | None = None
+    short_02_script_checksum: str | None = None
+    short_02_review_checksum: str | None = None
+    short_02_storyboard_checksum: str | None = None
+    provider_calls_completed: int = Field(ge=0)
+    provider_calls_this_run: int = Field(ge=0)
+    rejection_stage: ContentRunStage | None = None
+    rejection_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_stage_state(self) -> "ContentRunCheckpoint":
+        """Keep editorial rejection metadata and completed stages coherent."""
+        if len(self.completed_stages) != len(set(self.completed_stages)):
+            raise ValueError("Checkpoint completed stages must be unique.")
+        if self.current_stage not in self.completed_stages:
+            raise ValueError("Checkpoint current stage must be completed.")
+        rejected = self.status == ContentRunStatus.REVIEW_REJECTED
+        if rejected != (self.rejection_stage is not None):
+            raise ValueError("Review rejection status requires a rejection stage.")
+        if rejected and not self.rejection_reason:
+            raise ValueError("Review rejection status requires a reason.")
+        return self
 
 
 class ContentArtifactMetrics(BaseModel):

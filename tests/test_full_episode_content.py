@@ -381,7 +381,14 @@ async def test_dry_run_and_default_mode_make_zero_provider_calls(
 ) -> None:
     assert await cli.async_main(cli.parse_arguments(["--dry-run"]), root=tmp_path) == 0
     output = capsys.readouterr().out
-    assert f"Provider calls required: {EXPECTED_PROVIDER_CALLS}" in output
+    assert (
+        f"Maximum provider calls for fully successful fresh run: {EXPECTED_PROVIDER_CALLS}"
+        in output
+    )
+    assert "Checkpointing: enabled" in output
+    assert "Review rejection: safe stop" in output
+    assert "Automatic revision retries: 0" in output
+    assert "Partial resume: enabled" in output
     assert "Provider execution: disabled" in output
     assert not (tmp_path / "generated").exists()
 

@@ -6,8 +6,8 @@ import hashlib
 import json
 import sys
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from agents.concept_agent.agent import ConceptAgent
 from agents.research_agent.agent import ResearchAgent
@@ -22,15 +22,18 @@ from shared.ai.openai_client import OpenAIClient
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
 from shared.constants import DEFAULT_TOPIC_CATEGORY
+from shared.content.checkpoint import ContentCheckpointStore
 from shared.content.full_episode import (
     EXPECTED_PROVIDER_CALLS,
     FullEpisodeContentError,
-    FullEpisodeContentInput,
-    FullEpisodeContentService,
-    ShortContentInput,
-    slugify,
 )
-from shared.models.content_package import ContentPackageManifest
+from shared.content.workflow import (
+    ContentAgents,
+    ContentWorkflow,
+    ContentWorkflowResult,
+    ContentWorkflowSettings,
+)
+from shared.models.content_package import ContentPackageManifest, ContentRunStatus
 from shared.models.script_policy import ScriptLengthPolicy
 from shared.models.storyboard import VisualAssetType
 
@@ -77,6 +80,9 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--execute-provider", action="store_true")
     parser.add_argument("--resume", type=Path)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--revise-rejected-script", action="store_true")
+    action.add_argument("--continue", dest="continue_run", action="store_true")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args(arguments)
 
@@ -87,7 +93,11 @@ def print_preflight() -> None:
     print("Target: 4-5 min")
     print("Long-form target: 650-800 words; 20-35 scenes")
     print("Shorts: 2; 25-45 sec each; 4-8 scenes each")
-    print(f"Provider calls required: {EXPECTED_PROVIDER_CALLS}")
+    print(f"Maximum provider calls for fully successful fresh run: {EXPECTED_PROVIDER_CALLS}")
+    print("Checkpointing: enabled")
+    print("Review rejection: safe stop")
+    print("Automatic revision retries: 0")
+    print("Partial resume: enabled")
     print("Media generation: disabled")
     print("Voice generation: disabled")
     print("Image generation: disabled")
@@ -116,7 +126,7 @@ def load_resume(path: Path) -> ContentPackageManifest:
     return manifest
 
 
-def _agent(agent_type: type, client: OpenAIClient, root: Path):  # type: ignore[no-untyped-def]
+def _agent(agent_type: type, client: OpenAIClient, root: Path) -> Any:
     return agent_type(
         llm_client=client,
         prompt_loader=PromptLoader(root / "prompts"),
@@ -125,136 +135,116 @@ def _agent(agent_type: type, client: OpenAIClient, root: Path):  # type: ignore[
     )
 
 
-async def generate_package(root: Path, output_root: Path) -> tuple[ContentPackageManifest, Path]:
-    """Execute exactly twelve bounded content-agent calls and persist no media."""
+def workflow_settings() -> ContentWorkflowSettings:
+    """Return the bounded editorial settings for every checkpointed stage."""
+    return ContentWorkflowSettings(
+        category=DEFAULT_TOPIC_CATEGORY,
+        long_policy=LONG_POLICY,
+        short_policy=SHORT_POLICY,
+        long_constraints=LONG_EDITORIAL_CONSTRAINTS,
+        short_constraints=SHORT_CONSTRAINTS,
+        long_storyboard_constraints=(
+            "Create 20-35 scenes in 16:9. Prefer one canonical recurring protagonist. "
+            "Use IllustrationSpec for concepts and ChartSpec for exact numeric claims. "
+            "Keep typical scenes to 5-12 seconds and no scene above 15 seconds."
+        ),
+        short_storyboard_constraints=(
+            "Create 4-8 mobile-first scenes in 9:16 with large centered subjects, "
+            "minimal text, and simplified deterministic charts where numbers matter."
+        ),
+        allowed_visual_types={
+            VisualAssetType.AI_IMAGE,
+            VisualAssetType.CHART,
+            VisualAssetType.MOTION_GRAPHIC,
+            VisualAssetType.TYPOGRAPHY,
+        },
+    )
+
+
+async def execute_workflow(
+    root: Path,
+    output_root: Path,
+    *,
+    resume: Path | None = None,
+    revise: bool = False,
+) -> ContentWorkflowResult:
+    """Construct existing content agents only inside the explicit provider boundary."""
     client = OpenAIClient(OpenAISettings())
-    topic_agent = _agent(TopicAgent, client, root)
-    concept_agent = _agent(ConceptAgent, client, root)
-    research_agent = _agent(ResearchAgent, client, root)
-    script_agent = _agent(ScriptAgent, client, root)
-    reviewer_agent = _agent(ReviewerAgent, client, root)
-    storyboard_agent = _agent(StoryboardAgent, client, root)
+    workflow = ContentWorkflow(
+        ContentAgents(
+            topic=_agent(TopicAgent, client, root),
+            concept=_agent(ConceptAgent, client, root),
+            research=_agent(ResearchAgent, client, root),
+            script=_agent(ScriptAgent, client, root),
+            reviewer=_agent(ReviewerAgent, client, root),
+            storyboard=_agent(StoryboardAgent, client, root),
+        ),
+        workflow_settings(),
+    )
     try:
-        candidates = await topic_agent.discover(DEFAULT_TOPIC_CATEGORY)
-        topic = max(
-            candidates,
-            key=lambda item: (item.overall_score, item.evergreen_score, item.title.casefold()),
-        )
-        concept = await concept_agent.generate(topic, LONG_POLICY)
-        research = await research_agent.generate(concept)
-        long_script = await script_agent.generate(
-            concept,
-            research,
-            policy=LONG_POLICY,
-            editorial_constraints=LONG_EDITORIAL_CONSTRAINTS,
-        )
-        long_review = await reviewer_agent.review(
-            concept,
-            research,
-            long_script,
-            policy=LONG_POLICY,
-            editorial_constraints=LONG_EDITORIAL_CONSTRAINTS,
-        )
-        long_storyboard = await storyboard_agent.generate(
-            concept,
-            long_script,
-            long_review,
-            allowed_visual_asset_types={
-                VisualAssetType.AI_IMAGE,
-                VisualAssetType.CHART,
-                VisualAssetType.MOTION_GRAPHIC,
-                VisualAssetType.TYPOGRAPHY,
-            },
-            planning_constraints=(
-                "Create 20-35 scenes in 16:9. Prefer one canonical recurring protagonist. "
-                "Use IllustrationSpec for concepts and ChartSpec for exact numeric claims. "
-                "Keep typical scenes to 5-12 seconds and no scene above 15 seconds."
-            ),
-        )
-        short_inputs: list[ShortContentInput] = []
-        section_ids = [section.section_id for section in long_script.sections]
-        midpoint = max(1, len(section_ids) // 2)
-        provenance_groups = (section_ids[:midpoint], section_ids[midpoint:] or section_ids[-1:])
-        for index in range(2):
-            constraints = SHORT_CONSTRAINTS[index]
-            short_script = await script_agent.generate(
-                concept,
-                research,
-                policy=SHORT_POLICY,
-                editorial_constraints=constraints,
-            )
-            short_review = await reviewer_agent.review(
-                concept,
-                research,
-                short_script,
-                policy=SHORT_POLICY,
-                editorial_constraints=constraints,
-            )
-            short_storyboard = await storyboard_agent.generate(
-                concept,
-                short_script,
-                short_review,
-                allowed_visual_asset_types={
-                    VisualAssetType.AI_IMAGE,
-                    VisualAssetType.CHART,
-                    VisualAssetType.MOTION_GRAPHIC,
-                    VisualAssetType.TYPOGRAPHY,
-                },
-                planning_constraints=(
-                    "Create 4-8 mobile-first scenes in 9:16 with large centered subjects, "
-                    "minimal text, and simplified deterministic charts where numbers matter."
-                ),
-            )
-            short_inputs.append(
-                ShortContentInput(
-                    script=short_script,
-                    review=short_review,
-                    storyboard=short_storyboard,
-                    core_insight=short_script.sections[0].heading,
-                    payoff=short_script.conclusion,
-                    source_section_ids=tuple(provenance_groups[index]),
-                )
-            )
+        if resume is None:
+            return await workflow.fresh(root / output_root)
+        directory = root / resume
+        if revise:
+            return await workflow.revise(directory)
+        return await workflow.resume(directory)
     finally:
         await client.close()
-    package_id = f"{slugify(topic.title)}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-    directory = root / output_root / slugify(topic.title) / package_id
-    content = FullEpisodeContentInput(
-        topic=topic,
-        concept=concept,
-        research=research,
-        script=long_script,
-        review=long_review,
-        storyboard=long_storyboard,
-        shorts=(short_inputs[0], short_inputs[1]),
-    )
-    manifest = await FullEpisodeContentService().persist(
-        content,
-        output_directory=directory,
-        package_id=package_id,
-        provider_call_count=EXPECTED_PROVIDER_CALLS,
-    )
-    return manifest, directory
 
 
 async def async_main(options: argparse.Namespace, *, root: Path | None = None) -> int:
     selected_root = root or Path.cwd()
     try:
         print_preflight()
-        if options.resume is not None:
-            manifest = load_resume(selected_root / options.resume)
-            print(f"Resumed package: {manifest.package_id}")
-            print(f"Status: {manifest.approval_status}")
-            print("Provider calls this run: 0")
-            return 0
         if options.dry_run or not options.execute_provider:
+            if options.resume is not None:
+                directory = selected_root / options.resume
+                if (directory / "manifest.json").is_file():
+                    manifest = load_resume(directory)
+                    print(f"Resumed package: {manifest.package_id}")
+                    print(f"Status: {manifest.approval_status}")
+                else:
+                    checkpoint = ContentCheckpointStore(directory).load()
+                    print(f"Resumed checkpoint: {checkpoint.run_id}")
+                    print(f"Status: {checkpoint.status.value}")
+                    print(f"Last completed stage: {checkpoint.current_stage.value}")
+                print("Provider calls this run: 0")
             print("Provider execution: disabled")
             return 0
-        manifest, directory = await generate_package(selected_root, options.output_root)
-        print(f"Package: {manifest.package_id}")
-        print(f"Status: {manifest.approval_status}")
-        print(f"Provider calls this run: {manifest.provider_call_count}")
-        print(f"Output: {directory.relative_to(selected_root)}")
+        if options.resume is not None and not (
+            options.revise_rejected_script or options.continue_run
+        ):
+            raise ValueError("Provider resume requires --revise-rejected-script or --continue.")
+        result = await execute_workflow(
+            selected_root,
+            options.output_root,
+            resume=options.resume,
+            revise=bool(options.revise_rejected_script),
+        )
+        if result.rejected:
+            rejection_stage = result.checkpoint.rejection_stage
+            if rejection_stage is None:
+                raise FullEpisodeContentError("Rejected checkpoint is missing its stage.")
+            print("FULL EPISODE CONTENT STOPPED SAFELY")
+            print(f"Stage: {rejection_stage.value}")
+            print("Status: rejected")
+            print(f"Provider calls completed: {result.checkpoint.provider_calls_completed}")
+            print(f"Provider calls this run: {result.checkpoint.provider_calls_this_run}")
+            print(f"Checkpoint: {result.directory / 'checkpoint.json'}")
+            return 2
+        if result.checkpoint.status == ContentRunStatus.READY_TO_CONTINUE:
+            print("FULL EPISODE CONTENT REVISION CHECKPOINTED")
+            print(f"Stage: {result.checkpoint.current_stage.value}")
+            print("Status: ready_to_continue")
+            print(f"Provider calls this run: {result.checkpoint.provider_calls_this_run}")
+            print(f"Checkpoint: {result.directory / 'checkpoint.json'}")
+            return 0
+        if result.manifest is None:
+            raise FullEpisodeContentError("Content workflow did not produce a final manifest.")
+        print(f"Package: {result.manifest.package_id}")
+        print(f"Status: {result.manifest.approval_status}")
+        print(f"Provider calls this run: {result.checkpoint.provider_calls_this_run}")
+        print(f"Output: {result.directory.relative_to(selected_root)}")
         return 0
     except (OSError, ValueError, FullEpisodeContentError, json.JSONDecodeError) as error:
         print(f"Full episode content generation failed safely: {error}", file=sys.stderr)
