@@ -33,12 +33,28 @@ CHARACTER_ID = "SAVER_01"
 THUMBNAIL_TEXT_OPTIONS = ("PROTECT THE GAP", "MORE ≠ RICHER", "THE SALARY TRAP")
 RECOMMENDED_TEXT = THUMBNAIL_TEXT_OPTIONS[0]
 MINIMUM_FONT_SIZE = 64
+PREFERRED_FONT_SIZE = 78
+FONT_SIZE_STEP = 2
 MINIMUM_CONTRAST_RATIO = 4.5
 SAFE_MARGIN = 48
 TEXT_BOX = (650, 62, 1220, 270)
+TEXT_BOX_PADDING = 24
 NAVY = "#0B1020"
 WHITE = "#FFFFFF"
 GOLD = "#FFD54A"
+TEXT_LAYOUTS = {
+    "PROTECT THE GAP": "PROTECT\nTHE GAP",
+    "MORE ≠ RICHER": "MORE\n≠ RICHER",
+    "THE SALARY TRAP": "THE SALARY\nTRAP",
+}
+TextPlacement = tuple[
+    ImageFont.FreeTypeFont,
+    int,
+    float,
+    float,
+    tuple[float, float, float, float],
+    float,
+]
 
 
 class ThumbnailGenerationError(ValueError):
@@ -56,6 +72,14 @@ class ThumbnailPlan:
     reference_id: str
     reference_path: Path
     reference_checksum: str
+
+
+@dataclass(frozen=True)
+class ThumbnailGenerationResult:
+    manifest: ThumbnailGenerationManifest
+    qa: ThumbnailQA
+    output_directory: Path
+    provider_requests_this_run: int
 
 
 def text_slug(value: str) -> str:
@@ -168,7 +192,7 @@ class ThumbnailGenerationService:
         provider_quality: str | None,
         execute_provider: bool,
         local_only: bool = False,
-    ) -> tuple[ThumbnailGenerationManifest, ThumbnailQA, Path]:
+    ) -> ThumbnailGenerationResult:
         destination = output_root / plan.spec.package_id / "thumbnail"
         raw_path = destination / "provider/raw-thumbnail.png"
         previous = self._load_manifest(destination)
@@ -252,16 +276,43 @@ class ThumbnailGenerationService:
             qa_status=qa.status,
             warnings=qa.warnings,
         )
+        metadata_suffix = "" if not suffix else suffix
+        manifest_path = destination / f"manifest{metadata_suffix}.json"
+        qa_path = destination / f"qa{metadata_suffix}.json"
+        review_path = destination / f"review{metadata_suffix}.md"
         await write_bytes_atomic(
-            destination / "manifest.json",
+            manifest_path,
             json.dumps(manifest.model_dump(mode="json"), indent=2).encode(),
         )
         await write_bytes_atomic(
-            destination / "qa.json",
+            qa_path,
             json.dumps(qa.model_dump(mode="json"), indent=2).encode(),
         )
-        await write_bytes_atomic(destination / "review.md", review_report(manifest).encode())
-        return manifest, qa, destination
+        await write_bytes_atomic(review_path, review_report(manifest).encode())
+        return ThumbnailGenerationResult(manifest, qa, destination, provider_calls)
+
+    def raw_is_reusable(
+        self,
+        plan: ThumbnailPlan,
+        *,
+        output_root: Path,
+        provider_model: str,
+        provider_quality: str | None,
+    ) -> bool:
+        destination = output_root / plan.spec.package_id / "thumbnail"
+        raw_path = destination / "provider/raw-thumbnail.png"
+        previous = self._load_manifest(destination)
+        return bool(
+            previous
+            and raw_path.is_file()
+            and checksum_sha256(raw_path) == previous.provider_raw_checksum
+            and previous.source_publishing_checksum == plan.publishing_checksum
+            and previous.thumbnail_brief_checksum == plan.brief_checksum
+            and previous.character_reference_checksum == plan.reference_checksum
+            and previous.prompt_checksum == plan.prompt_checksum
+            and previous.provider_model == provider_model
+            and previous.provider_quality == provider_quality
+        )
 
     @staticmethod
     def _load_manifest(directory: Path) -> ThumbnailGenerationManifest | None:
@@ -285,29 +336,57 @@ def composite_thumbnail(content: bytes, text: str) -> tuple[bytes, ThumbnailQA]:
         raise ThumbnailGenerationError("thumbnail_image_invalid") from error
     if image.size != (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT):
         raise ThumbnailGenerationError("thumbnail_dimensions_invalid")
+    try:
+        lines = TEXT_LAYOUTS[text]
+    except KeyError as error:
+        raise ThumbnailGenerationError("unsupported_thumbnail_text") from error
     draw = ImageDraw.Draw(image, "RGBA")
     draw.rounded_rectangle(TEXT_BOX, radius=26, fill=(11, 16, 32, 232))
-    font_size = 78
-    font = ImageFont.truetype(str(resolve_font_path()), font_size)
-    lines = "PROTECT\nTHE GAP" if text == RECOMMENDED_TEXT else text
-    box = draw.multiline_textbbox((0, 0), lines, font=font, spacing=2, align="center")
-    text_width, text_height = box[2] - box[0], box[3] - box[1]
-    x = TEXT_BOX[0] + (TEXT_BOX[2] - TEXT_BOX[0] - text_width) / 2
-    y = TEXT_BOX[1] + (TEXT_BOX[3] - TEXT_BOX[1] - text_height) / 2 - box[1]
-    draw.multiline_text((x, y), lines, font=font, fill=WHITE, spacing=2, align="center")
-    underline_y = min(TEXT_BOX[3] - 18, y + text_height + 10)
-    draw.rounded_rectangle((x, underline_y, x + text_width, underline_y + 6), radius=3, fill=GOLD)
-    safe = (
-        x >= SAFE_MARGIN
-        and y >= SAFE_MARGIN
-        and x + text_width <= THUMBNAIL_WIDTH - SAFE_MARGIN
-        and y + text_height <= THUMBNAIL_HEIGHT - SAFE_MARGIN
+    inner = (
+        TEXT_BOX[0] + TEXT_BOX_PADDING,
+        TEXT_BOX[1] + TEXT_BOX_PADDING,
+        TEXT_BOX[2] - TEXT_BOX_PADDING,
+        TEXT_BOX[3] - TEXT_BOX_PADDING,
     )
+    placement: TextPlacement | None = None
+    for font_size in range(PREFERRED_FONT_SIZE, MINIMUM_FONT_SIZE - 1, -FONT_SIZE_STEP):
+        font = ImageFont.truetype(str(resolve_font_path()), font_size)
+        box = draw.multiline_textbbox((0, 0), lines, font=font, spacing=2, align="center")
+        text_width, text_height = box[2] - box[0], box[3] - box[1]
+        x = TEXT_BOX[0] + (TEXT_BOX[2] - TEXT_BOX[0] - text_width) / 2 - box[0]
+        y = TEXT_BOX[1] + (TEXT_BOX[3] - TEXT_BOX[1] - text_height) / 2 - box[1]
+        actual = (x + box[0], y + box[1], x + box[2], y + box[3])
+        underline_y = min(TEXT_BOX[3] - 18, y + text_height + 10)
+        if (
+            actual[0] >= inner[0]
+            and actual[1] >= inner[1]
+            and actual[2] <= inner[2]
+            and underline_y + 6 <= inner[3]
+        ):
+            placement = font, font_size, x, y, actual, underline_y
+            break
+    if placement is None:
+        raise ThumbnailGenerationError("thumbnail_text_cannot_fit")
+    font, font_size, x, y, actual, underline_y = placement
+    draw.multiline_text((x, y), lines, font=font, fill=WHITE, spacing=2, align="center")
+    draw.rounded_rectangle(
+        (actual[0], underline_y, actual[2], underline_y + 6), radius=3, fill=GOLD
+    )
+    safe = (
+        actual[0] >= SAFE_MARGIN
+        and actual[1] >= SAFE_MARGIN
+        and actual[2] <= THUMBNAIL_WIDTH - SAFE_MARGIN
+        and actual[3] <= THUMBNAIL_HEIGHT - SAFE_MARGIN
+    )
+    underline_inside = underline_y >= TEXT_BOX[1] and underline_y + 6 <= TEXT_BOX[3]
     contrast = contrast_ratio(WHITE, NAVY)
     qa = ThumbnailQA(
         status=(
             "passed"
-            if safe and contrast >= MINIMUM_CONTRAST_RATIO and font_size >= MINIMUM_FONT_SIZE
+            if safe
+            and underline_inside
+            and contrast >= MINIMUM_CONTRAST_RATIO
+            and font_size >= MINIMUM_FONT_SIZE
             else "failed"
         ),
         width=image.width,
@@ -316,6 +395,7 @@ def composite_thumbnail(content: bytes, text: str) -> tuple[bytes, ThumbnailQA]:
         nonzero_image=True,
         text_safe_margins=safe,
         text_not_clipped=safe,
+        underline_inside_panel=underline_inside,
         contrast_ratio=contrast,
         contrast_passed=contrast >= MINIMUM_CONTRAST_RATIO,
         font_size=font_size,

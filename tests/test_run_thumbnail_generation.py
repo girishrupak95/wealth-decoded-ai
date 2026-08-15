@@ -1,5 +1,6 @@
 """Thumbnail CLI paid-boundary tests."""
 
+import asyncio
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any
@@ -30,3 +31,14 @@ def test_non_provider_dependencies_do_not_construct_provider() -> None:
     cli = load_cli()
     _, provider, _, _ = cli.build_service(ROOT, execute_provider=False)
     assert provider is None
+
+
+def test_dry_run_wording_reports_current_invocation(
+    capsys: Any,
+) -> None:
+    cli = load_cli()
+    options = cli.parse_arguments(["--dry-run", "--execute-provider"])
+    assert asyncio.run(cli.async_main(options, root=ROOT)) == 0
+    output = capsys.readouterr().out
+    assert "Expected provider requests this run: 0" in output
+    assert "Provider request required if raw asset is not reusable:" in output

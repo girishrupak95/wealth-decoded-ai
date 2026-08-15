@@ -72,8 +72,9 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
     selected_root = root or Path.cwd()
     provider: OpenAIImageGenerationProvider | None = None
     try:
+        execute_provider = bool(options.execute_provider and not options.dry_run)
         service, provider, model, quality = build_service(
-            selected_root, execute_provider=bool(options.execute_provider)
+            selected_root, execute_provider=execute_provider
         )
         plan = service.preflight(selected_root / PUBLISHING_DIRECTORY, thumbnail_text=options.text)
         print("THUMBNAIL GENERATION PREFLIGHT")
@@ -84,22 +85,37 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         print("Reference conditioning: yes")
         print("Generated text: disabled")
         print("Deterministic typography: enabled")
-        print("Expected provider requests: 1")
-        print("Automatic retries: 0")
-        if options.dry_run or (not options.execute_provider and not options.local_only):
-            print("Provider execution: disabled")
-            return 0
-        manifest, qa, destination = await service.generate(
+        raw_reusable = service.raw_is_reusable(
             plan,
             output_root=selected_root / options.output_root,
             provider_model=model,
             provider_quality=quality,
-            execute_provider=bool(options.execute_provider),
+        )
+        expected_this_run = 1 if execute_provider and not raw_reusable else 0
+        print(f"Expected provider requests this run: {expected_this_run}")
+        print(
+            "Provider request required if raw asset is not reusable: "
+            f"{'no' if raw_reusable else 'yes'}"
+        )
+        print("Automatic retries: 0")
+        if options.dry_run or (not options.execute_provider and not options.local_only):
+            print("Provider execution: disabled")
+            return 0
+        result = await service.generate(
+            plan,
+            output_root=selected_root / options.output_root,
+            provider_model=model,
+            provider_quality=quality,
+            execute_provider=execute_provider,
             local_only=bool(options.local_only),
         )
-        print(f"Provider requests made: {manifest.provider_request_count}")
-        print(f"QA status: {qa.status}")
-        print(f"Thumbnail: {destination / manifest.final_asset_path}")
+        print(f"Provider requests this run: {result.provider_requests_this_run}")
+        print(
+            "Historical provider requests for raw asset: "
+            f"{result.manifest.provider_request_count}"
+        )
+        print(f"QA status: {result.qa.status}")
+        print(f"Thumbnail: {result.output_directory / result.manifest.final_asset_path}")
         return 0
     except (OSError, ValueError, ThumbnailGenerationError) as error:
         print(f"Thumbnail generation failed safely: {error}", file=sys.stderr)

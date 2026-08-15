@@ -28,6 +28,7 @@ class ThumbnailQA(BaseModel):
     nonzero_image: bool
     text_safe_margins: bool
     text_not_clipped: bool
+    underline_inside_panel: bool
     contrast_ratio: float = Field(ge=0)
     contrast_passed: bool
     font_size: int = Field(gt=0)

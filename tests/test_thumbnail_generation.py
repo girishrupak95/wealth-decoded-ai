@@ -15,6 +15,7 @@ from shared.visual.character_resolver import CharacterResolver
 from shared.visual.composition_planner import CompositionPlanner
 from shared.visual.illustration_prompt import IllustrationPromptBuilder
 from shared.visual.thumbnail_generation import (
+    MINIMUM_FONT_SIZE,
     RECOMMENDED_TEXT,
     THUMBNAIL_HEIGHT,
     THUMBNAIL_WIDTH,
@@ -89,18 +90,19 @@ def test_missing_reference_fails_before_provider() -> None:
         subject.preflight(PUBLISHING)
 
 
-def test_deterministic_compositor_dimensions_bounds_contrast_and_preview() -> None:
-    first, first_qa = composite_thumbnail(png(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), RECOMMENDED_TEXT)
-    second, second_qa = composite_thumbnail(
-        png(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), RECOMMENDED_TEXT
-    )
+@pytest.mark.parametrize("text", [RECOMMENDED_TEXT, "MORE ≠ RICHER", "THE SALARY TRAP"])
+def test_deterministic_compositor_dimensions_bounds_contrast_and_preview(text: str) -> None:
+    first, first_qa = composite_thumbnail(png(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), text)
+    second, second_qa = composite_thumbnail(png(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), text)
     assert first == second
     assert first_qa.model_dump(exclude={"created_at", "updated_at"}) == second_qa.model_dump(
         exclude={"created_at", "updated_at"}
     )
     assert first_qa.status == "passed"
     assert first_qa.text_safe_margins and first_qa.text_not_clipped
+    assert first_qa.underline_inside_panel
     assert first_qa.contrast_passed and first_qa.font_size_passed
+    assert first_qa.font_size >= MINIMUM_FONT_SIZE
     with Image.open(io.BytesIO(first)) as final:
         assert final.size == (1280, 720)
     with Image.open(io.BytesIO(create_preview(first))) as preview:
@@ -112,13 +114,15 @@ async def test_one_request_raw_retained_and_local_text_variant_reuses_it(tmp_pat
     provider = FakeProvider()
     generator = service(provider)
     plan = generator.preflight(PUBLISHING)
-    manifest, qa, output = await generator.generate(
+    paid = await generator.generate(
         plan,
         output_root=tmp_path,
         provider_model="gpt-image-2",
         provider_quality="low",
         execute_provider=True,
     )
+    manifest, qa, output = paid.manifest, paid.qa, paid.output_directory
+    assert paid.provider_requests_this_run == 1
     assert provider.calls == 1 and manifest.provider_request_count == 1
     assert qa.status == "passed" and manifest.status == "review_required"
     assert (output / "provider/raw-thumbnail.png").is_file()
@@ -127,7 +131,11 @@ async def test_one_request_raw_retained_and_local_text_variant_reuses_it(tmp_pat
     assert manifest.final_asset_checksum and manifest.preview_checksum
 
     alternate = generator.preflight(PUBLISHING, thumbnail_text="MORE ≠ RICHER")
-    local, _, _ = await generator.generate(
+    canonical_asset = (output / "final/thumbnail.png").read_bytes()
+    canonical_manifest = (output / "manifest.json").read_bytes()
+    canonical_qa = (output / "qa.json").read_bytes()
+    raw_asset = (output / "provider/raw-thumbnail.png").read_bytes()
+    local_result = await generator.generate(
         alternate,
         output_root=tmp_path,
         provider_model="gpt-image-2",
@@ -135,9 +143,19 @@ async def test_one_request_raw_retained_and_local_text_variant_reuses_it(tmp_pat
         execute_provider=False,
         local_only=True,
     )
+    local = local_result.manifest
+    assert local_result.provider_requests_this_run == 0
     assert provider.calls == 1
     assert local.thumbnail_text == "MORE ≠ RICHER"
     assert local.final_asset_path.name == "thumbnail-more-richer.png"
+    assert local.provider_request_count == 1
+    assert (output / "manifest-more-richer.json").is_file()
+    assert (output / "qa-more-richer.json").is_file()
+    assert (output / "review-more-richer.md").is_file()
+    assert (output / "final/thumbnail.png").read_bytes() == canonical_asset
+    assert (output / "manifest.json").read_bytes() == canonical_manifest
+    assert (output / "qa.json").read_bytes() == canonical_qa
+    assert (output / "provider/raw-thumbnail.png").read_bytes() == raw_asset
 
 
 @pytest.mark.asyncio
