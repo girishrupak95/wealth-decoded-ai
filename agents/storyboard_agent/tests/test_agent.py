@@ -11,6 +11,7 @@ from agents.storyboard_agent.agent import (
     StoryboardAgent,
     StoryboardIllustrationValidationError,
 )
+from agents.storyboard_agent.prompt import build_storyboard_request
 from shared.ai.knowledge_loader import KnowledgeLoader
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
@@ -246,7 +247,7 @@ async def test_approved_review_generates_validated_storyboard_and_prompt_context
     assert storyboard.title == concept.title
     assert client.calls == 1
     assert client.request is not None
-    assert client.request.max_output_tokens == STORYBOARD_MAX_OUTPUT_TOKENS == 8_000
+    assert client.request.max_output_tokens == STORYBOARD_MAX_OUTPUT_TOKENS == 10_000
     assert client.request.context["video_concept"]["title"] == concept.title
     assert client.request.context["video_script"]["title"] == script.title
     assert client.request.context["script_review"]["approved"] is True
@@ -260,6 +261,28 @@ async def test_approved_review_generates_validated_storyboard_and_prompt_context
         "action",
     ]
     assert client.request.context["planning_constraints"] == ""
+
+
+def test_storyboard_prompt_compacts_lifecycle_and_review_scoring_context() -> None:
+    concept = make_concept()
+    script = make_script()
+    review = make_review()
+
+    request = build_storyboard_request(concept, script, review)
+    context = json.dumps(request.context)
+    uncompressed = json.dumps(
+        {
+            "video_concept": concept.model_dump(mode="json"),
+            "video_script": script.model_dump(mode="json"),
+            "script_review": review.model_dump(mode="json"),
+        }
+    )
+
+    assert len(context) < len(uncompressed)
+    assert "created_at" not in context
+    assert "overall_score" not in context
+    assert request.context["video_script"]["sections"]
+    assert request.context["script_review"]["approved"] is True
 
 
 @pytest.mark.asyncio

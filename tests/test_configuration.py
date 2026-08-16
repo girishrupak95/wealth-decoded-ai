@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from agents.script_agent.agent import SCRIPT_MAX_OUTPUT_TOKENS
 from agents.storyboard_agent.agent import STORYBOARD_MAX_OUTPUT_TOKENS
 from pydantic import ValidationError
 
@@ -144,7 +145,10 @@ def test_storyboard_image_and_voiceover_configuration_remains_available() -> Non
     visual = VisualAssetSettings()
     voice_values = configuration.load_settings_section("voiceover")
 
-    assert STORYBOARD_MAX_OUTPUT_TOKENS == 8_000
+    assert STORYBOARD_MAX_OUTPUT_TOKENS == 10_000
+    assert STORYBOARD_MAX_OUTPUT_TOKENS <= 10_000
+    assert SCRIPT_MAX_OUTPUT_TOKENS == 6_000
+    assert configuration.load_settings_section("openai")["max_tokens"] == 4_000
     assert visual.image_model == "gpt-image-2"
     assert visual.image_quality == "low"
     assert voice_values["model_id"] == "eleven_multilingual_v2"

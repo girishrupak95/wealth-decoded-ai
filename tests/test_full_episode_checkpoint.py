@@ -23,7 +23,11 @@ from shared.content.workflow import (
     TopicGenerator,
 )
 from shared.exceptions.ai import OpenAIOutputTokenLimitError
-from shared.models.content_package import ContentRunStage, ContentRunStatus
+from shared.models.content_package import (
+    ContentRunCheckpoint,
+    ContentRunStage,
+    ContentRunStatus,
+)
 from tests.test_full_episode_content import content, review, script
 
 cli = importlib.import_module("apps.api.scripts.run_full_episode_content")
@@ -233,7 +237,148 @@ async def test_cli_reports_controlled_provider_stop_without_traceback(
     assert "provider_output_truncated" in captured.out
     assert "Provider requests attempted this run: 1" in captured.out
     assert "Successful provider calls this run: 0" in captured.out
+    assert "Stage: long_form_script_revision" in captured.out
     assert "Traceback" not in captured.out + captured.err
+
+
+@pytest.mark.parametrize(
+    ("completed", "expected"),
+    [
+        (list(ContentRunStage)[:5], "long_form_storyboard"),
+        (list(ContentRunStage)[:6], "short_01_script"),
+        (list(ContentRunStage)[:7], "short_01_review"),
+        (list(ContentRunStage)[:8], "short_01_storyboard"),
+        (list(ContentRunStage)[:9], "short_02_script"),
+        (list(ContentRunStage)[:10], "short_02_review"),
+        (list(ContentRunStage)[:11], "short_02_storyboard"),
+    ],
+)
+def test_provider_stop_stage_uses_first_uncheckpointed_stage(
+    completed: list[ContentRunStage], expected: str
+) -> None:
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=completed[-1],
+        completed_stages=completed,
+        provider_calls_completed=len(completed),
+        provider_calls_this_run=0,
+    )
+    options = cli.parse_arguments(["--resume", "run", "--continue", "--execute-provider"])
+
+    assert cli.provider_stop_stage(options, checkpoint) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("completed", "expected"),
+    [
+        (list(ContentRunStage)[:5], "long_form_storyboard"),
+        (list(ContentRunStage)[:6], "short_01_script"),
+        (list(ContentRunStage)[:7], "short_01_review"),
+        (list(ContentRunStage)[:8], "short_01_storyboard"),
+        (list(ContentRunStage)[:9], "short_02_script"),
+        (list(ContentRunStage)[:10], "short_02_review"),
+        (list(ContentRunStage)[:11], "short_02_storyboard"),
+    ],
+)
+async def test_cli_provider_stop_prints_actual_continuation_stage(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    completed: list[ContentRunStage],
+    expected: str,
+) -> None:
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=completed[-1],
+        completed_stages=completed,
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+    )
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_workflow",
+        AsyncMock(side_effect=OpenAIOutputTokenLimitError("truncated")),
+    )
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--continue", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 3
+    assert f"Stage: {expected}" in captured.out
+    assert "Provider requests attempted this run: 1" in captured.out
+    assert "Successful provider calls this run: 0" in captured.out
+    assert "Historical completed provider calls: 11" in captured.out
+
+
+def test_storyboard_preflights_report_bounded_mode_specific_workloads(
+    capsys: CaptureFixture[str],
+) -> None:
+    cli.print_storyboard_provider_preflight(long_form=True)
+    long_output = capsys.readouterr().out
+    cli.print_storyboard_provider_preflight(long_form=False)
+    short_output = capsys.readouterr().out
+
+    assert "Mode: long_form" in long_output
+    assert "Target scenes: 20-35" in long_output
+    assert "Structured output budget: 10000 tokens" in long_output
+    assert "Automatic provider retries: 0" in long_output
+    assert "Mode: short" in short_output
+    assert "Target scenes: 4-8" in short_output
+    assert "Aspect intent: 9:16" in short_output
+    assert "Structured output budget: 10000 tokens" in short_output
+    assert "Automatic provider retries: 0" in short_output
+
+
+@pytest.mark.asyncio
+async def test_long_storyboard_truncation_preserves_ready_checkpoint_and_stops_shorts(
+    tmp_path: Path,
+) -> None:
+    fixture = content()
+    rejected = review(fixture.script, approved=False)
+    fake_agents, calls = agents(scripts=[fixture.script], reviews=[rejected], storyboards=[])
+    reports: list[str] = []
+    workflow = ContentWorkflow(fake_agents, cli.workflow_settings(), report=reports.append)
+    initial = await workflow.fresh(tmp_path)
+    revised = script(fixture.script.title, 700)
+    calls["revision"].side_effect = [revised]
+    calls["review"].side_effect = [review(revised)]
+    await workflow.revise(initial.directory)
+    store = ContentCheckpointStore(initial.directory)
+    ready = store.load().model_copy(update={"provider_calls_completed": 11})
+    await store.save(ready)
+    protected = {
+        name: (initial.directory / name).read_bytes()
+        for name in ("checkpoint.json", "long-form/script.json", "long-form/review.json")
+    }
+    calls["storyboard"].side_effect = OpenAIOutputTokenLimitError("truncated")
+
+    with pytest.raises(OpenAIOutputTokenLimitError):
+        await workflow.resume(initial.directory)
+
+    assert calls["storyboard"].await_count == 1
+    assert calls["script"].await_count == 1
+    assert "STORYBOARD PROVIDER PREFLIGHT" in reports
+    assert "Mode: long_form" in reports
+    for name, payload in protected.items():
+        assert (initial.directory / name).read_bytes() == payload
+    unchanged = store.load()
+    assert unchanged.status == ContentRunStatus.READY_TO_CONTINUE
+    assert unchanged.provider_calls_completed == 11
+    assert unchanged.long_storyboard_checksum is None
+    assert ContentRunStage.LONG_STORYBOARD not in unchanged.completed_stages
+    assert not (initial.directory / "long-form/storyboard.json").exists()
+    assert not (initial.directory / "long-form/storyboard.md").exists()
 
 
 @pytest.mark.asyncio

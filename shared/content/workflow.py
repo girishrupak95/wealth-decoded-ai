@@ -10,6 +10,11 @@ from pydantic import BaseModel
 
 from shared.content.checkpoint import STAGE_FILES, ContentCheckpointStore
 from shared.content.full_episode import (
+    LONG_MAX_SCENES,
+    LONG_MIN_SCENES,
+    SHORT_MAX_SCENES,
+    SHORT_MIN_SCENES,
+    FullEpisodeContentError,
     FullEpisodeContentInput,
     FullEpisodeContentService,
     ShortContentInput,
@@ -29,6 +34,13 @@ from shared.models.storyboard import Storyboard, VisualAssetType
 from shared.models.topic import TopicCandidate
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
+from shared.storyboard.validation import (
+    validate_final_duration,
+    validate_section_coverage,
+    validate_sequence_numbers,
+    validate_timing_continuity,
+    validate_unique_scene_ids,
+)
 from shared.visual.processing import write_bytes_atomic
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -117,6 +129,7 @@ class ContentWorkflowSettings:
     long_storyboard_constraints: str
     short_storyboard_constraints: str
     allowed_visual_types: set[VisualAssetType]
+    storyboard_output_budget: int
 
 
 @dataclass(frozen=True)
@@ -306,6 +319,7 @@ class ContentWorkflow:
             )
             return ContentWorkflowResult(directory, checkpoint)
         if ContentRunStage.LONG_STORYBOARD not in checkpoint.completed_stages:
+            self._report_storyboard_preflight(long_form=True)
             generated_storyboard = await self.agents.storyboard.generate(
                 concept,
                 long_script,
@@ -313,6 +327,7 @@ class ContentWorkflow:
                 allowed_visual_asset_types=self.settings.allowed_visual_types,
                 planning_constraints=self.settings.long_storyboard_constraints,
             )
+            self._validate_storyboard_stage(generated_storyboard, long_script, long_form=True)
             checkpoint = await self._stage(
                 store,
                 checkpoint,
@@ -367,6 +382,7 @@ class ContentWorkflow:
             checkpoint = await store.reject(checkpoint, review_stage, self._review_reason(review))
             return ContentWorkflowResult(store.directory, checkpoint)
         if storyboard_stage not in checkpoint.completed_stages:
+            self._report_storyboard_preflight(long_form=False)
             generated_storyboard = await self.agents.storyboard.generate(
                 concept,
                 script,
@@ -374,6 +390,7 @@ class ContentWorkflow:
                 allowed_visual_asset_types=self.settings.allowed_visual_types,
                 planning_constraints=self.settings.short_storyboard_constraints,
             )
+            self._validate_storyboard_stage(generated_storyboard, script, long_form=False)
             checkpoint = await self._stage(
                 store,
                 checkpoint,
@@ -382,6 +399,40 @@ class ContentWorkflow:
                 markdown=FullEpisodeContentService._storyboard_markdown(generated_storyboard),
             )
         return ContentWorkflowResult(store.directory, checkpoint)
+
+    def _report_storyboard_preflight(self, *, long_form: bool) -> None:
+        mode = "long_form" if long_form else "short"
+        scene_target = "20-35" if long_form else "4-8"
+        self.report("STORYBOARD PROVIDER PREFLIGHT")
+        self.report(f"Mode: {mode}")
+        self.report(f"Target scenes: {scene_target}")
+        if not long_form:
+            self.report("Aspect intent: 9:16")
+        self.report(f"Structured output budget: {self.settings.storyboard_output_budget} tokens")
+        self.report("Automatic provider retries: 0")
+
+    @staticmethod
+    def _validate_storyboard_stage(
+        storyboard: Storyboard, script: VideoScript, *, long_form: bool
+    ) -> None:
+        validate_unique_scene_ids(storyboard.scenes)
+        validate_sequence_numbers(storyboard.scenes)
+        validate_timing_continuity(storyboard.scenes)
+        validate_section_coverage(
+            storyboard.scenes, [section.section_id for section in script.sections]
+        )
+        validate_final_duration(storyboard.scenes, script.total_estimated_duration_seconds)
+        FullEpisodeContentService._validate_storyboard(
+            storyboard,
+            minimum_scenes=LONG_MIN_SCENES if long_form else SHORT_MIN_SCENES,
+            maximum_scenes=LONG_MAX_SCENES if long_form else SHORT_MAX_SCENES,
+            expected_aspect_ratio="16:9" if long_form else "9:16",
+            label="Long-form" if long_form else "Short",
+        )
+        if long_form and len({scene.visual_asset_type for scene in storyboard.scenes}) < 3:
+            raise FullEpisodeContentError(
+                "Long-form storyboard requires at least three visual modes."
+            )
 
     async def _finalize(
         self,

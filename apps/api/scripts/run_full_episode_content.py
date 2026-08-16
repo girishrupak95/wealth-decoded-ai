@@ -13,7 +13,7 @@ from agents.concept_agent.agent import ConceptAgent
 from agents.research_agent.agent import ResearchAgent
 from agents.reviewer_agent.agent import ReviewerAgent
 from agents.script_agent.agent import SCRIPT_MAX_OUTPUT_TOKENS, ScriptAgent
-from agents.storyboard_agent.agent import StoryboardAgent
+from agents.storyboard_agent.agent import STORYBOARD_MAX_OUTPUT_TOKENS, StoryboardAgent
 from agents.topic_agent.agent import TopicAgent
 
 from app.config.settings import OpenAISettings
@@ -34,7 +34,12 @@ from shared.content.workflow import (
     ContentWorkflowSettings,
 )
 from shared.exceptions.ai import OpenAIOutputTokenLimitError
-from shared.models.content_package import ContentPackageManifest, ContentRunStatus
+from shared.models.content_package import (
+    ContentPackageManifest,
+    ContentRunCheckpoint,
+    ContentRunStage,
+    ContentRunStatus,
+)
 from shared.models.script_policy import full_episode_policy, short_content_policy
 from shared.models.storyboard import VisualAssetType
 
@@ -112,6 +117,7 @@ SHORT_CONSTRAINTS = (
         "Use only the supplied research and cite its exact references.",
     ],
 )
+PROVIDER_STAGE_ORDER = tuple(ContentRunStage)
 
 
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
@@ -151,6 +157,36 @@ def print_script_revision_preflight() -> None:
     print("Narration target: approximately 690 words")
     print(f"Structured output budget: {SCRIPT_MAX_OUTPUT_TOKENS} tokens")
     print("Automatic provider retries: 0")
+
+
+def print_storyboard_provider_preflight(*, long_form: bool) -> None:
+    """Print the deterministic storyboard workload without invoking its provider."""
+    print("STORYBOARD PROVIDER PREFLIGHT")
+    print(f"Mode: {'long_form' if long_form else 'short'}")
+    print(f"Target scenes: {'20-35' if long_form else '4-8'}")
+    if not long_form:
+        print("Aspect intent: 9:16")
+    print(f"Structured output budget: {STORYBOARD_MAX_OUTPUT_TOKENS} tokens")
+    print("Automatic provider retries: 0")
+
+
+def next_provider_stage(checkpoint: ContentRunCheckpoint) -> ContentRunStage | None:
+    """Return the first provider stage not durably recorded in the checkpoint."""
+    return next(
+        (stage for stage in PROVIDER_STAGE_ORDER if stage not in checkpoint.completed_stages),
+        None,
+    )
+
+
+def provider_stop_stage(options: argparse.Namespace, checkpoint: ContentRunCheckpoint) -> str:
+    """Identify the failed request from the unchanged checkpoint and explicit CLI mode."""
+    if options.revise_rejected_script:
+        rejection_stage = checkpoint.rejection_stage
+        if rejection_stage is None:
+            return "script_revision"
+        return f"{rejection_stage.value.removesuffix('_review')}_script_revision"
+    stage = next_provider_stage(checkpoint)
+    return stage.value if stage is not None else checkpoint.current_stage.value
 
 
 def load_resume(path: Path) -> ContentPackageManifest:
@@ -196,7 +232,11 @@ def workflow_settings() -> ContentWorkflowSettings:
         long_storyboard_constraints=(
             "Create 20-35 scenes in 16:9. Prefer one canonical recurring protagonist. "
             "Use IllustrationSpec for concepts and ChartSpec for exact numeric claims. "
-            "Keep typical scenes to 5-12 seconds and no scene above 15 seconds."
+            "Keep typical scenes to 5-12 seconds and no scene above 15 seconds. Use at least "
+            "three visual modes and semantic motion intent only. Without changing or adding "
+            "narration, divide Limit Three visually into three beats: balance reductions (fees "
+            "and general tax effect), purchasing power (inflation and nominal versus "
+            "inflation-adjusted values), and return uncertainty (changing and negative returns)."
         ),
         short_storyboard_constraints=(
             "Create 4-8 mobile-first scenes in 9:16 with large centered subjects, "
@@ -208,6 +248,7 @@ def workflow_settings() -> ContentWorkflowSettings:
             VisualAssetType.MOTION_GRAPHIC,
             VisualAssetType.TYPOGRAPHY,
         },
+        storyboard_output_budget=STORYBOARD_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -260,6 +301,14 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
                     print(f"Resumed checkpoint: {checkpoint.run_id}")
                     print(f"Status: {checkpoint.status.value}")
                     print(f"Last completed stage: {checkpoint.current_stage.value}")
+                    next_stage = next_provider_stage(checkpoint)
+                    if next_stage == ContentRunStage.LONG_STORYBOARD:
+                        print_storyboard_provider_preflight(long_form=True)
+                    elif next_stage in {
+                        ContentRunStage.SHORT_01_STORYBOARD,
+                        ContentRunStage.SHORT_02_STORYBOARD,
+                    }:
+                        print_storyboard_provider_preflight(long_form=False)
                 print("Provider calls this run: 0")
             print("Provider execution: disabled")
             return 0
@@ -305,7 +354,7 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         directory = selected_root / options.resume
         checkpoint = ContentCheckpointStore(directory).load()
         print("FULL EPISODE CONTENT PROVIDER STOP")
-        print("Stage: long_form_script_revision")
+        print(f"Stage: {provider_stop_stage(options, checkpoint)}")
         print("Status: provider_output_truncated")
         print("Provider requests attempted this run: 1")
         print("Successful provider calls this run: 0")
