@@ -14,6 +14,9 @@ def verify_compound_growth(
     value = Decimal(str(principal)) * (Decimal("1") + Decimal(str(annual_rate))) ** periods
     rounded = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return CalculationVerification(
+        verification_id=(
+            f"compound-growth-{principal:g}-{annual_rate:g}-{periods}-no-contributions"
+        ),
         calculation_type="compound_growth_no_contributions",
         inputs={
             "principal": principal,

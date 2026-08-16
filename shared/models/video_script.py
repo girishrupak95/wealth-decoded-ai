@@ -12,7 +12,9 @@ from shared.models.base import BaseModel
 from shared.models.claim_verification import (
     CalculationVerification,
     ClaimReferenceBinding,
+    ClaimSupportType,
     ClaimVerificationStatus,
+    calculation_traceability_issues,
 )
 
 _CURRENCY_AMOUNT = re.compile(r"[$€£₹]\s*\d")
@@ -50,7 +52,22 @@ class ScriptSection(BaseModel):
     @model_validator(mode="after")
     def require_source_or_verification(self, info: ValidationInfo) -> "ScriptSection":
         """Preserve traceability for every narrated section."""
-        if not self.source_references and not self.verification_required:
+        if len(self.calculation_verifications) == 1:
+            legacy_id = self.calculation_verifications[0].verification_id
+            self.claim_bindings = [
+                (
+                    binding.model_copy(update={"calculation_verification_id": legacy_id})
+                    if binding.support_type == ClaimSupportType.DETERMINISTIC_CALCULATION
+                    and not binding.calculation_verification_id
+                    else binding
+                )
+                for binding in self.claim_bindings
+            ]
+        if (
+            not self.source_references
+            and not self.verification_required
+            and not self.calculation_verifications
+        ):
             raise ValueError("A section requires sources or editorial verification.")
         unresolved_binding = any(
             binding.verification_status == ClaimVerificationStatus.REQUIRED
@@ -75,6 +92,18 @@ class ScriptSection(BaseModel):
             raise ValueError(
                 "Exact numeric claims require verification or verified calculation provenance."
             )
+        traceability_issues = calculation_traceability_issues(
+            section_id=self.section_id,
+            claim_texts=(
+                self.exact_numeric_claims
+                if self.exact_numeric_claims
+                else [self.narration, *self.on_screen_text]
+            ),
+            bindings=self.claim_bindings,
+            verifications=self.calculation_verifications,
+        )
+        if traceability_issues:
+            raise ValueError(" ".join(traceability_issues))
         return self
 
 

@@ -5,6 +5,12 @@ from pathlib import Path
 import pytest
 
 from agents.reviewer_agent.service import ScriptReviewService
+from shared.content.claim_verification import verify_compound_growth
+from shared.models.claim_verification import (
+    ClaimReferenceBinding,
+    ClaimSupportType,
+    ClaimVerificationStatus,
+)
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import ScriptLengthPolicy, short_production_fixture_policy
 from shared.models.script_review import ReviewCategory, ReviewFinding, ReviewScores, ScriptReview
@@ -430,6 +436,85 @@ async def test_invalid_exact_source_and_unresolved_verification_block(tmp_path: 
     )
     assert any(
         "unresolved required verification" in item for item in artifacts.review.blocking_findings
+    )
+
+
+def deterministic_section() -> ScriptSection:
+    verification = verify_compound_growth(principal=1000, annual_rate=0.05, periods=30)
+    return ScriptSection(
+        section_id="calculation",
+        heading="Verified example",
+        narration="word " * 220,
+        estimated_duration_seconds=90,
+        visual_direction="Deterministic chart",
+        on_screen_text=["$1,000", "5%", "30 years", "$4,321.94"],
+        source_references=[],
+        verification_required=False,
+        exact_numeric_claims=["$1,000 at 5% for 30 years with no contributions becomes $4,321.94."],
+        claim_bindings=[
+            ClaimReferenceBinding(
+                claim_id="compound-example",
+                section_id="calculation",
+                claim_summary=(
+                    "$1,000 at 5% for 30 years with no contributions becomes $4,321.94."
+                ),
+                reference=None,
+                calculation_verification_id=verification.verification_id,
+                support_type=ClaimSupportType.DETERMINISTIC_CALCULATION,
+                verification_status=ClaimVerificationStatus.VERIFIED,
+            )
+        ],
+        calculation_verifications=[verification],
+    )
+
+
+@pytest.mark.asyncio
+async def test_verified_deterministic_arithmetic_needs_no_external_reference(
+    tmp_path: Path,
+) -> None:
+    section = deterministic_section()
+    source = script().model_copy(update={"sections": [section, section, section]})
+
+    artifacts = await ScriptReviewService(MockReviewer(), tmp_path).review(
+        concept(), research(), source, datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert not any(finding.category == "sourcing" for finding in artifacts.review.findings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "unverified", "result"])
+async def test_invalid_deterministic_provenance_remains_blocking(
+    tmp_path: Path, failure: str
+) -> None:
+    section = deterministic_section()
+    if failure == "missing":
+        binding = section.claim_bindings[0].model_copy(
+            update={"calculation_verification_id": "missing"}
+        )
+        section = section.model_copy(update={"claim_bindings": [binding]})
+    elif failure == "unverified":
+        verification = section.calculation_verifications[0].model_copy(update={"verified": False})
+        section = section.model_copy(update={"calculation_verifications": [verification]})
+    else:
+        section = section.model_copy(
+            update={
+                "exact_numeric_claims": [
+                    "$1,000 at 5% for 30 years with no contributions becomes $4,999.99."
+                ]
+            }
+        )
+    source = script().model_copy(update={"sections": [section, section, section]})
+
+    artifacts = await ScriptReviewService(MockReviewer(), tmp_path).review(
+        concept(), research(), source, datetime(2026, 8, 3, tzinfo=UTC)
+    )
+
+    assert not artifacts.review.approved
+    assert any(
+        "deterministic" in finding.recommended_change.casefold()
+        for finding in artifacts.review.findings
+        if finding.category == "sourcing"
     )
 
 

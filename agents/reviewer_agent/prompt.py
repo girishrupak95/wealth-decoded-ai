@@ -94,4 +94,8 @@ def _review_format_guidance(policy: ScriptLengthPolicy) -> str:
         "long-form concept production notes are acceptable when they cannot fit honestly. The "
         "active ScriptLengthPolicy overrides conflicting duration guidance in concept metadata, "
         "estimated_duration_minutes, research story_outline, and knowledge-base long-form defaults."
+        " A claim with support_type=deterministic_calculation, a matching "
+        "calculation_verification_id, verified calculation inputs/output, and a verified status "
+        "does not require an external research reference. Continue requiring exact research "
+        "references for research-backed factual claims."
     )

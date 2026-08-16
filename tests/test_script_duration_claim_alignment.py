@@ -1,15 +1,17 @@
 """Shared duration-policy and deterministic claim-verification regressions."""
 
 import importlib
+from typing import cast
 
 import pytest
 from agents.reviewer_agent.prompt import build_reviewer_request
-from agents.script_agent.prompt import build_script_request
+from agents.script_agent.prompt import build_script_request, build_script_revision_request
 from pydantic import ValidationError
 
 from shared.content.claim_verification import ClaimLanguageValidator, verify_compound_growth
 from shared.content.full_episode import FullEpisodeContentError, FullEpisodeContentService
 from shared.models.claim_verification import (
+    CalculationVerification,
     ClaimReferenceBinding,
     ClaimSupportType,
     ClaimVerificationStatus,
@@ -105,7 +107,9 @@ def section_values() -> dict[str, object]:
         "on_screen_text": ["$4,321.94"],
         "source_references": ["Investor.gov Compound Interest Calculator"],
         "verification_required": False,
-        "exact_numeric_claims": ["$1,000 at 5% for 30 years is approximately $4,321.94"],
+        "exact_numeric_claims": [
+            "$1,000 at 5% for 30 years with no contributions is approximately $4,321.94"
+        ],
     }
 
 
@@ -134,7 +138,8 @@ def test_verified_calculation_and_claim_binding_store_provenance() -> None:
             claim_id="compound-example",
             section_id="section-01",
             claim_summary="Hypothetical compound-growth result",
-            reference="Investor.gov Compound Interest Calculator",
+            reference=None,
+            calculation_verification_id=("compound-growth-1000-0.05-30-no-contributions"),
             support_type=ClaimSupportType.DETERMINISTIC_CALCULATION,
             verification_status=ClaimVerificationStatus.VERIFIED,
         )
@@ -142,6 +147,126 @@ def test_verified_calculation_and_claim_binding_store_provenance() -> None:
     section = ScriptSection(**values)
     assert section.calculation_verifications[0].computed_value == 4321.94
     assert section.claim_bindings[0].section_id == section.section_id
+    assert section.claim_bindings[0].reference is None
+    assert (
+        section.claim_bindings[0].calculation_verification_id
+        == section.calculation_verifications[0].verification_id
+    )
+
+
+def verified_calculation_section_values() -> dict[str, object]:
+    values = section_values()
+    verification = verify_compound_growth(principal=1000, annual_rate=0.05, periods=30)
+    values["source_references"] = []
+    values["calculation_verifications"] = [verification]
+    values["claim_bindings"] = [
+        ClaimReferenceBinding(
+            claim_id="compound-example",
+            section_id="section-01",
+            claim_summary=("$1,000 at 5% for 30 years with no contributions becomes $4,321.94."),
+            reference=None,
+            calculation_verification_id=verification.verification_id,
+            support_type=ClaimSupportType.DETERMINISTIC_CALCULATION,
+            verification_status=ClaimVerificationStatus.VERIFIED,
+        )
+    ]
+    return values
+
+
+def test_deterministic_calculation_binding_requires_existing_provenance() -> None:
+    values = verified_calculation_section_values()
+    binding = cast(list[ClaimReferenceBinding], values["claim_bindings"])[0]
+    values["claim_bindings"] = [
+        binding.model_copy(update={"calculation_verification_id": "missing"})
+    ]
+    with pytest.raises(ValidationError, match="nonexistent deterministic provenance"):
+        ScriptSection(**values)
+
+
+@pytest.mark.parametrize(
+    ("claim", "message"),
+    [
+        (
+            "$2,000 at 5% for 30 years with no contributions becomes $4,321.94.",
+            "inputs do not match",
+        ),
+        (
+            "$1,000 at 5% for 30 years with no contributions becomes $4,999.99.",
+            "result does not match",
+        ),
+    ],
+)
+def test_calculation_claim_must_match_verified_inputs_and_result(claim: str, message: str) -> None:
+    values = verified_calculation_section_values()
+    values["exact_numeric_claims"] = [claim]
+    binding = cast(list[ClaimReferenceBinding], values["claim_bindings"])[0]
+    values["claim_bindings"] = [binding.model_copy(update={"claim_summary": claim})]
+    with pytest.raises(ValidationError, match=message):
+        ScriptSection(**values)
+
+
+def test_unverified_calculation_cannot_support_exact_claim() -> None:
+    values = verified_calculation_section_values()
+    verification = cast(list[CalculationVerification], values["calculation_verifications"])[0]
+    values["calculation_verifications"] = [verification.model_copy(update={"verified": False})]
+    with pytest.raises(ValidationError, match="not verified"):
+        ScriptSection(**values)
+
+
+def test_research_claim_binding_still_requires_reference() -> None:
+    with pytest.raises(ValidationError, match="exact reference"):
+        ClaimReferenceBinding(
+            claim_id="research-claim",
+            section_id="section-01",
+            claim_summary="Research-backed claim",
+            support_type=ClaimSupportType.SOURCE,
+            verification_status=ClaimVerificationStatus.VERIFIED,
+        )
+
+
+def test_final_revision_guidance_is_explicit_and_stays_inside_policy() -> None:
+    fixture = content()
+    request = build_script_revision_request(
+        fixture.concept,
+        fixture.research,
+        fixture.script,
+        fixture.review,
+        cli.LONG_POLICY,
+        cli.LONG_EDITORIAL_CONSTRAINTS,
+    )
+    guidance = str(request.context["active_editorial_constraints"])
+    policy = str(request.context["active_script_constraints"])
+
+    assert "real unresolved viewer-facing question" in guidance
+    assert "smooth upward calculator-growth line" in guidance
+    assert "interrupt or pause it" in guidance
+    assert "more periods in which they may potentially grow" in guidance
+    assert "(A) balance reductions" in guidance
+    assert "(B) purchasing power" in guidance
+    assert "(C) return uncertainty" in guidance
+    assert "Do not reintroduce diversification" in guidance
+    assert "calculator inputs" in guidance
+    assert "applicable tax rules" in guidance
+    assert "calculation_verification_id" in guidance
+    assert "Compress existing wording rather than add narration" in guidance
+    assert "650-725 words" in policy
+    assert "680-710 words" in policy
+    assert "300 seconds" in policy
+
+
+def test_reviewer_guidance_distinguishes_calculation_and_research_support() -> None:
+    fixture = content()
+    request = build_reviewer_request(
+        fixture.concept,
+        fixture.research,
+        fixture.script,
+        policy=cli.LONG_POLICY,
+        editorial_constraints=cli.LONG_EDITORIAL_CONSTRAINTS,
+    )
+    guidance = str(request.context["review_format_guidance"])
+    assert "support_type=deterministic_calculation" in guidance
+    assert "does not require an external research reference" in guidance
+    assert "requiring exact research references for research-backed factual claims" in guidance
 
 
 def test_claim_language_stays_within_current_source_support() -> None:

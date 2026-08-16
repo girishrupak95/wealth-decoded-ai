@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from shared.constants import JSON_FILE_SUFFIX, MARKDOWN_FILE_SUFFIX
 from shared.content.claim_verification import ClaimLanguageValidator
+from shared.models.claim_verification import calculation_traceability_issues
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import ScriptLengthPolicy, derived_script_totals
 from shared.models.script_review import ReviewFinding, ScriptReview
@@ -211,7 +212,22 @@ class ScriptReviewService:
                     )
                 )
         for section in script.sections:
-            if not section.source_references and not section.verification_required:
+            calculation_issues = calculation_traceability_issues(
+                section_id=section.section_id,
+                claim_texts=(
+                    section.exact_numeric_claims
+                    if section.exact_numeric_claims
+                    else [section.narration, *section.on_screen_text]
+                ),
+                bindings=section.claim_bindings,
+                verifications=section.calculation_verifications,
+            )
+            valid_calculation = bool(section.calculation_verifications) and not calculation_issues
+            if (
+                not section.source_references
+                and not section.verification_required
+                and not valid_calculation
+            ):
                 findings.append(
                     self._finding(
                         "sourcing",
@@ -238,7 +254,11 @@ class ScriptReviewService:
                         "Use an exact reference from the validated research package.",
                     )
                 )
-            if section.verification_required and not section.source_references:
+            if (
+                section.verification_required
+                and not section.source_references
+                and not valid_calculation
+            ):
                 findings.append(
                     self._finding(
                         "sourcing",
@@ -247,6 +267,18 @@ class ScriptReviewService:
                         "Section has unresolved required verification.",
                         section.narration,
                         "Resolve the factual claim against an exact research reference.",
+                    )
+                )
+            for calculation_issue in calculation_issues:
+                findings.append(
+                    self._finding(
+                        "sourcing",
+                        "critical",
+                        section.section_id,
+                        calculation_issue,
+                        "Deterministic calculation binding failed validation.",
+                        "Bind the claim to matching, verified deterministic calculation "
+                        "provenance.",
                     )
                 )
             contribution_issue = ClaimLanguageValidator.contribution_issue(section.narration)
