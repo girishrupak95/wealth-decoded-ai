@@ -66,9 +66,16 @@ def _active_script_constraints(policy: ScriptLengthPolicy) -> str:
     spoken_fields = "hook + intro + every sections[].narration + conclusion + CTA"
     if policy.include_disclaimer_in_spoken_count:
         spoken_fields += " + disclaimer"
+    preferred = (
+        f" Prefer {policy.preferred_min_words}-{policy.preferred_max_words} words to preserve "
+        "natural-pacing headroom."
+        if policy.preferred_min_words is not None and policy.preferred_max_words is not None
+        else ""
+    )
     return (
         f"ACTIVE SCRIPT LENGTH POLICY ({policy.profile_name}): total spoken word count must be "
-        f"{policy.min_words}-{policy.max_words} words; target approximately {target_words} words. "
+        f"{policy.min_words}-{policy.max_words} words; target approximately {target_words} words."
+        f"{preferred} "
         f"Total duration must be {policy.min_duration_seconds}-{policy.max_duration_seconds} "
         f"seconds; target approximately {target_duration} seconds. Narration across hook, intro, "
         f"TOTAL SPOKEN WORDS = {spoken_fields}. The title, headings, visual_direction, "
@@ -83,6 +90,9 @@ def _active_script_constraints(policy: ScriptLengthPolicy) -> str:
         "Deterministic duration is derived from the complete spoken-word total and configured "
         "speaking rate; per-section durations reflect only that section narration, while top-level "
         "duration reflects all spoken fields. Use 4-6 concise sections. These active constraints "
+        "For exact numerical claims, populate exact_numeric_claims and claim_bindings. Set "
+        "verification_required=true unless completed deterministic calculation provenance is "
+        "stored in calculation_verifications with verified=true. "
         "override any conflicting duration or length guidance inside the concept, research "
         "package, "
         "or knowledge base."

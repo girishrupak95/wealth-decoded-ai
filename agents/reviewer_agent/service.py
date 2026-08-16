@@ -11,13 +11,10 @@ from typing import Protocol, cast
 from loguru import logger
 from pydantic import BaseModel
 
-from shared.constants import (
-    DEFAULT_SCRIPT_WORDS_PER_MINUTE,
-    JSON_FILE_SUFFIX,
-    MARKDOWN_FILE_SUFFIX,
-)
+from shared.constants import JSON_FILE_SUFFIX, MARKDOWN_FILE_SUFFIX
+from shared.content.claim_verification import ClaimLanguageValidator
 from shared.models.research import ResearchPackage
-from shared.models.script_policy import ScriptLengthPolicy
+from shared.models.script_policy import ScriptLengthPolicy, derived_script_totals
 from shared.models.script_review import ReviewFinding, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
@@ -252,6 +249,22 @@ class ScriptReviewService:
                         "Resolve the factual claim against an exact research reference.",
                     )
                 )
+            contribution_issue = ClaimLanguageValidator.contribution_issue(section.narration)
+            tax_issue = ClaimLanguageValidator.tax_issue(
+                section.narration, section.source_references
+            )
+            for issue in (contribution_issue, tax_issue):
+                if issue is not None:
+                    findings.append(
+                        self._finding(
+                            "sourcing",
+                            "critical",
+                            section.section_id,
+                            issue,
+                            section.narration,
+                            "Narrow or remove the claim to match the exact cited source.",
+                        )
+                    )
         for sentence in self._duplicate_sentences(script):
             findings.append(
                 self._finding(
@@ -266,19 +279,7 @@ class ScriptReviewService:
         return findings
 
     def _authoritative_totals(self, script: VideoScript) -> dict[str, int]:
-        return {
-            "spoken_word_count": script.calculate_word_count(
-                include_disclaimer=self._policy.include_disclaimer_in_spoken_count
-            ),
-            "duration_seconds": script.calculate_duration_seconds(
-                words_per_minute=DEFAULT_SCRIPT_WORDS_PER_MINUTE,
-                include_disclaimer=self._policy.include_disclaimer_in_spoken_count,
-            ),
-            "min_words": self._policy.min_words,
-            "max_words": self._policy.max_words,
-            "min_duration_seconds": self._policy.min_duration_seconds,
-            "max_duration_seconds": self._policy.max_duration_seconds,
-        }
+        return derived_script_totals(script, self._policy)
 
     def _remove_inconsistent_length_findings(
         self, editorial: ScriptReview, totals: dict[str, int]

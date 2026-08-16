@@ -2,13 +2,22 @@
 
 import re
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from shared.constants import (
     DEFAULT_SCRIPT_WORDS_PER_MINUTE,
     SECTION_DURATION_MISMATCH_SECONDS,
 )
 from shared.models.base import BaseModel
+from shared.models.claim_verification import (
+    CalculationVerification,
+    ClaimReferenceBinding,
+    ClaimVerificationStatus,
+)
+
+_CURRENCY_AMOUNT = re.compile(r"[$€£₹]\s*\d")
+_PERCENTAGE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:%|percent\b)", re.IGNORECASE)
+_TIME_PERIOD = re.compile(r"\b\d+\s+years?\b", re.IGNORECASE)
 
 
 def count_narration_words(texts: list[str]) -> int:
@@ -34,12 +43,38 @@ class ScriptSection(BaseModel):
     on_screen_text: list[str]
     source_references: list[str]
     verification_required: bool
+    exact_numeric_claims: list[str] = Field(default_factory=list)
+    claim_bindings: list[ClaimReferenceBinding] = Field(default_factory=list)
+    calculation_verifications: list[CalculationVerification] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def require_source_or_verification(self) -> "ScriptSection":
+    def require_source_or_verification(self, info: ValidationInfo) -> "ScriptSection":
         """Preserve traceability for every narrated section."""
         if not self.source_references and not self.verification_required:
             raise ValueError("A section requires sources or editorial verification.")
+        unresolved_binding = any(
+            binding.verification_status == ClaimVerificationStatus.REQUIRED
+            for binding in self.claim_bindings
+        )
+        verified_binding = any(
+            binding.verification_status == ClaimVerificationStatus.VERIFIED
+            for binding in self.claim_bindings
+        )
+        verified_calculation = any(
+            verification.verified for verification in self.calculation_verifications
+        )
+        exact_text = " ".join([self.narration, *self.on_screen_text])
+        implicit_calculation = all(
+            pattern.search(exact_text) for pattern in (_CURRENCY_AMOUNT, _PERCENTAGE, _TIME_PERIOD)
+        )
+        if (self.exact_numeric_claims or unresolved_binding or implicit_calculation) and not (
+            self.verification_required or verified_calculation or verified_binding
+        ):
+            if info.context and info.context.get("allow_legacy_unverified_exact_claims"):
+                return self
+            raise ValueError(
+                "Exact numeric claims require verification or verified calculation provenance."
+            )
         return self
 
 

@@ -52,6 +52,18 @@ class ScriptAgent(BaseAgent):
             for reference in section.source_references
             if reference not in research.references
         }
+        unverified_sources.update(
+            binding.reference
+            for section in script.sections
+            for binding in section.claim_bindings
+            if binding.reference is not None and binding.reference not in research.references
+        )
         if unverified_sources:
             raise ScriptSourceReferenceError(script, unverified_sources)
+        if any(
+            binding.section_id != section.section_id
+            for section in script.sections
+            for binding in section.claim_bindings
+        ):
+            raise ValueError("Claim bindings must identify their containing script section.")
         return script

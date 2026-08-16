@@ -271,7 +271,7 @@ def test_short_word_count_is_bounded(count: int) -> None:
         FullEpisodeContentService().validate(changed)
 
 
-def test_short_duration_and_vertical_format_are_required() -> None:
+def test_short_effective_length_and_vertical_format_are_required() -> None:
     package = content()
     bad_script = script("Too Long", 120).model_copy(update={"total_estimated_duration_seconds": 50})
     bad = ShortContentInput(
@@ -283,7 +283,7 @@ def test_short_duration_and_vertical_format_are_required() -> None:
         }
     )
     changed = FullEpisodeContentInput(**{**package.__dict__, "shorts": (bad, package.shorts[1])})
-    with pytest.raises(FullEpisodeContentError, match="duration"):
+    with pytest.raises(FullEpisodeContentError, match="word count"):
         FullEpisodeContentService().validate(changed)
 
     vertical_script = package.shorts[0].script

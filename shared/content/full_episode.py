@@ -13,6 +13,12 @@ from shared.models.content_package import (
     ShortProvenance,
 )
 from shared.models.research import ResearchPackage
+from shared.models.script_policy import (
+    ScriptLengthPolicy,
+    derived_script_totals,
+    full_episode_policy,
+    short_content_policy,
+)
 from shared.models.script_review import ScriptReview
 from shared.models.storyboard import Storyboard, VisualAssetType
 from shared.models.topic import TopicCandidate
@@ -20,16 +26,18 @@ from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 from shared.visual.processing import write_bytes_atomic
 
-LONG_MIN_WORDS = 650
-LONG_MAX_WORDS = 800
-LONG_MIN_DURATION_SECONDS = 240
-LONG_MAX_DURATION_SECONDS = 300
+LONG_POLICY = full_episode_policy()
+SHORT_POLICY = short_content_policy()
+LONG_MIN_WORDS = LONG_POLICY.min_words
+LONG_MAX_WORDS = LONG_POLICY.max_words
+LONG_MIN_DURATION_SECONDS = LONG_POLICY.min_duration_seconds
+LONG_MAX_DURATION_SECONDS = LONG_POLICY.max_duration_seconds
 LONG_MIN_SCENES = 20
 LONG_MAX_SCENES = 35
-SHORT_MIN_WORDS = 70
-SHORT_MAX_WORDS = 120
-SHORT_MIN_DURATION_SECONDS = 25
-SHORT_MAX_DURATION_SECONDS = 45
+SHORT_MIN_WORDS = SHORT_POLICY.min_words
+SHORT_MAX_WORDS = SHORT_POLICY.max_words
+SHORT_MIN_DURATION_SECONDS = SHORT_POLICY.min_duration_seconds
+SHORT_MAX_DURATION_SECONDS = SHORT_POLICY.max_duration_seconds
 SHORT_MIN_SCENES = 4
 SHORT_MAX_SCENES = 8
 EXPECTED_PROVIDER_CALLS = 12
@@ -93,6 +101,7 @@ class FullEpisodeContentService:
             maximum_words=LONG_MAX_WORDS,
             minimum_duration=LONG_MIN_DURATION_SECONDS,
             maximum_duration=LONG_MAX_DURATION_SECONDS,
+            policy=LONG_POLICY,
             label="Long-form",
         )
         self._validate_storyboard(
@@ -130,6 +139,7 @@ class FullEpisodeContentService:
                 maximum_words=SHORT_MAX_WORDS,
                 minimum_duration=SHORT_MIN_DURATION_SECONDS,
                 maximum_duration=SHORT_MAX_DURATION_SECONDS,
+                policy=SHORT_POLICY,
                 label=label,
             )
             self._validate_storyboard(
@@ -233,13 +243,15 @@ class FullEpisodeContentService:
         maximum_words: int,
         minimum_duration: int,
         maximum_duration: int,
+        policy: ScriptLengthPolicy,
         label: str,
     ) -> None:
         if not review.approved or review.script_title != script.title:
             raise FullEpisodeContentError(f"{label} requires its approved script review.")
-        if not minimum_words <= script.estimated_word_count <= maximum_words:
+        totals = derived_script_totals(script, policy)
+        if not minimum_words <= totals["spoken_word_count"] <= maximum_words:
             raise FullEpisodeContentError(f"{label} word count is outside its target contract.")
-        if not minimum_duration <= script.total_estimated_duration_seconds <= maximum_duration:
+        if not minimum_duration <= totals["duration_seconds"] <= maximum_duration:
             raise FullEpisodeContentError(f"{label} duration is outside its target contract.")
 
     @staticmethod
@@ -253,6 +265,12 @@ class FullEpisodeContentService:
             for reference in section.source_references
             if reference not in references
         }
+        unsupported.update(
+            binding.reference
+            for section in script.sections
+            for binding in section.claim_bindings
+            if binding.reference is not None and binding.reference not in references
+        )
         if unsupported:
             raise FullEpisodeContentError(f"{label} contains unsupported research references.")
 

@@ -23,7 +23,7 @@ from shared.models.content_package import (
     ContentRunStatus,
 )
 from shared.models.research import ResearchPackage
-from shared.models.script_policy import ScriptLengthPolicy
+from shared.models.script_policy import ScriptLengthPolicy, derived_script_totals
 from shared.models.script_review import ScriptReview
 from shared.models.storyboard import Storyboard, VisualAssetType
 from shared.models.topic import TopicCandidate
@@ -189,7 +189,10 @@ class ContentWorkflow:
             script_stage = ContentRunStage.SHORT_02_SCRIPT
             policy = self.settings.short_policy
             constraints = self.settings.short_constraints[1]
-        previous = self._load(directory, script_stage, VideoScript)
+        previous = VideoScript.model_validate_json(
+            (directory / STAGE_FILES[script_stage]).read_text(),
+            context={"allow_legacy_unverified_exact_claims": True},
+        )
         rejected_review = self._load(directory, stage, ScriptReview)
         archive = directory / STAGE_FILES[script_stage].parent / "revisions"
         await write_bytes_atomic(archive / "rejected-script.json", canonical_bytes(previous))
@@ -237,6 +240,7 @@ class ContentWorkflow:
             revised,
             policy=policy,
             editorial_constraints=constraints,
+            authoritative_totals=derived_script_totals(revised, policy),
         )
         checkpoint = await self._stage(store, checkpoint, stage, revised_review)
         if not revised_review.approved:
@@ -284,6 +288,7 @@ class ContentWorkflow:
                 long_script,
                 policy=self.settings.long_policy,
                 editorial_constraints=self.settings.long_constraints,
+                authoritative_totals=derived_script_totals(long_script, self.settings.long_policy),
             )
             checkpoint = await self._stage(
                 store, checkpoint, ContentRunStage.LONG_REVIEW, generated_review
@@ -348,6 +353,7 @@ class ContentWorkflow:
                 script,
                 policy=self.settings.short_policy,
                 editorial_constraints=constraints,
+                authoritative_totals=derived_script_totals(script, self.settings.short_policy),
             )
             checkpoint = await self._stage(store, checkpoint, review_stage, generated_review)
         review = self._load(store.directory, review_stage, ScriptReview)

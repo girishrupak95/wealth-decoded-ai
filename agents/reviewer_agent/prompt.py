@@ -1,13 +1,9 @@
 """Prompt request construction for editorial script review."""
 
 from shared.ai.base_agent import AgentRequest
-from shared.constants import (
-    DEFAULT_SCRIPT_WORDS_PER_MINUTE,
-    REVIEWER_AGENT_SYSTEM_PROMPT,
-    REVIEWER_AGENT_USER_PROMPT,
-)
+from shared.constants import REVIEWER_AGENT_SYSTEM_PROMPT, REVIEWER_AGENT_USER_PROMPT
 from shared.models.research import ResearchPackage
-from shared.models.script_policy import ScriptLengthPolicy
+from shared.models.script_policy import ScriptLengthPolicy, derived_script_totals
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 
@@ -38,19 +34,7 @@ def build_reviewer_request(
 
 
 def _authoritative_totals(script: VideoScript, policy: ScriptLengthPolicy) -> dict[str, int]:
-    return {
-        "spoken_word_count": script.calculate_word_count(
-            include_disclaimer=policy.include_disclaimer_in_spoken_count
-        ),
-        "duration_seconds": script.calculate_duration_seconds(
-            words_per_minute=DEFAULT_SCRIPT_WORDS_PER_MINUTE,
-            include_disclaimer=policy.include_disclaimer_in_spoken_count,
-        ),
-        "min_words": policy.min_words,
-        "max_words": policy.max_words,
-        "min_duration_seconds": policy.min_duration_seconds,
-        "max_duration_seconds": policy.max_duration_seconds,
-    }
+    return derived_script_totals(script, policy)
 
 
 def _format_authoritative_totals(totals: dict[str, int]) -> str:
@@ -92,6 +76,8 @@ def _active_editorial_constraints(editorial_constraints: list[str] | None) -> st
             "Active constraints win over conflicting recommendations.",
             "Require exact references for factual claims, but allow general editorial guidance "
             "with source_references=[] and verification_required=true.",
+            "A section combining exact currency, rate, and time-period inputs must set "
+            "verification_required=true or contain verified deterministic calculation provenance.",
         ]
     )
 

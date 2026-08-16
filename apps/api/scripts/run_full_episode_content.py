@@ -34,32 +34,29 @@ from shared.content.workflow import (
     ContentWorkflowSettings,
 )
 from shared.models.content_package import ContentPackageManifest, ContentRunStatus
-from shared.models.script_policy import ScriptLengthPolicy
+from shared.models.script_policy import full_episode_policy, short_content_policy
 from shared.models.storyboard import VisualAssetType
 
 DEFAULT_OUTPUT_ROOT = Path("generated/content-packages")
-LONG_POLICY = ScriptLengthPolicy(
-    min_words=650,
-    max_words=800,
-    min_duration_seconds=240,
-    max_duration_seconds=300,
-    target_words=700,
-    target_duration_seconds=290,
-    profile_name="full_episode_4_to_5_minutes",
-)
-SHORT_POLICY = ScriptLengthPolicy(
-    min_words=70,
-    max_words=120,
-    min_duration_seconds=25,
-    max_duration_seconds=45,
-    target_words=95,
-    target_duration_seconds=39,
-    profile_name="derived_short",
-)
+LONG_POLICY = full_episode_policy()
+SHORT_POLICY = short_content_policy()
 LONG_EDITORIAL_CONSTRAINTS = [
     "Use a narrative arc: hook, setup, mechanism, consequence/example, practical framework, close.",
     "Include an early pattern interrupt, a mid-video reset, and a payoff to the opening question.",
     "Use only claims supported by the supplied research and keep the CTA restrained.",
+    "Target 680-710 spoken words and never exceed 725 words or 300 authoritative seconds.",
+    "Remove diversification, household-controllability claims, and sustainable-schedule advice.",
+    "Retain fees, inflation/purchasing power, variable and potentially negative returns.",
+    (
+        "Describe contributions only as calculator inputs that can affect ending balance; do not "
+        "generalize about what households can control."
+    ),
+    (
+        "Use only this general tax caveat: taxes can affect the amount left to compound, while "
+        "exact treatment depends on the investment and applicable tax rules."
+    ),
+    "Retain one deterministically verified hypothetical calculation and the calculator checklist.",
+    "Keep the opening-question payoff, disclaimer, restrained CTA, and reduce repetition.",
 ]
 SHORT_CONSTRAINTS = (
     [
@@ -91,7 +88,9 @@ def print_preflight() -> None:
     """Print the complete zero-cost workload without constructing a provider client."""
     print("FULL EPISODE CONTENT PREFLIGHT")
     print("Target: 4-5 min")
-    print("Long-form target: 650-800 words; 20-35 scenes")
+    print(
+        f"Long-form target: {LONG_POLICY.min_words}-{LONG_POLICY.max_words} words; " "20-35 scenes"
+    )
     print("Shorts: 2; 25-45 sec each; 4-8 scenes each")
     print(f"Maximum provider calls for fully successful fresh run: {EXPECTED_PROVIDER_CALLS}")
     print("Checkpointing: enabled")
