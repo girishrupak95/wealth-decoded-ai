@@ -71,6 +71,19 @@ def create_client(
     return openai_module.OpenAIClient(openai_settings), responses
 
 
+def test_sdk_automatic_retries_are_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    constructor: dict[str, object] = {}
+
+    def build(**kwargs: object) -> MockAsyncOpenAI:
+        constructor.update(kwargs)
+        return MockAsyncOpenAI(MockResponses(DEFAULT_RESPONSE))
+
+    monkeypatch.setattr(openai_module, "AsyncOpenAI", build)
+    openai_module.OpenAIClient(settings(model="gpt-5.6-luna"))
+
+    assert constructor["max_retries"] == 0
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-5-mini", "gpt-5", "gpt-5.6"])
 async def test_gpt_five_models_omit_temperature_and_include_output_limit(

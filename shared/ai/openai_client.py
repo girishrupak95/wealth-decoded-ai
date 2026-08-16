@@ -15,7 +15,7 @@ class OpenAIClient(LLMClient):
     def __init__(self, settings: OpenAISettings) -> None:
         super().__init__()
         self._settings = settings
-        self._client = AsyncOpenAI(api_key=settings.api_key.get_secret_value())
+        self._client = AsyncOpenAI(api_key=settings.api_key.get_secret_value(), max_retries=0)
 
     async def generate(self, request: LLMRequest) -> str:
         try:

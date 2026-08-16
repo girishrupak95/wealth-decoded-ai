@@ -12,7 +12,7 @@ from typing import Any
 from agents.concept_agent.agent import ConceptAgent
 from agents.research_agent.agent import ResearchAgent
 from agents.reviewer_agent.agent import ReviewerAgent
-from agents.script_agent.agent import ScriptAgent
+from agents.script_agent.agent import SCRIPT_MAX_OUTPUT_TOKENS, ScriptAgent
 from agents.storyboard_agent.agent import StoryboardAgent
 from agents.topic_agent.agent import TopicAgent
 
@@ -33,6 +33,7 @@ from shared.content.workflow import (
     ContentWorkflowResult,
     ContentWorkflowSettings,
 )
+from shared.exceptions.ai import OpenAIOutputTokenLimitError
 from shared.models.content_package import ContentPackageManifest, ContentRunStatus
 from shared.models.script_policy import full_episode_policy, short_content_policy
 from shared.models.storyboard import VisualAssetType
@@ -100,6 +101,15 @@ def print_preflight() -> None:
     print("Media generation: disabled")
     print("Voice generation: disabled")
     print("Image generation: disabled")
+
+
+def print_script_revision_preflight() -> None:
+    """Expose bounded revision request behavior without estimating provider billing."""
+    print("SCRIPT PROVIDER PREFLIGHT")
+    print("Mode: revision")
+    print("Narration target: approximately 690 words")
+    print(f"Structured output budget: {SCRIPT_MAX_OUTPUT_TOKENS} tokens")
+    print("Automatic provider retries: 0")
 
 
 def load_resume(path: Path) -> ContentPackageManifest:
@@ -195,6 +205,8 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
     selected_root = root or Path.cwd()
     try:
         print_preflight()
+        if options.revise_rejected_script:
+            print_script_revision_preflight()
         if options.dry_run or not options.execute_provider:
             if options.resume is not None:
                 directory = selected_root / options.resume
@@ -245,6 +257,21 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         print(f"Provider calls this run: {result.checkpoint.provider_calls_this_run}")
         print(f"Output: {result.directory.relative_to(selected_root)}")
         return 0
+    except OpenAIOutputTokenLimitError:
+        if options.resume is None:
+            print("Full episode content provider output was truncated safely.", file=sys.stderr)
+            return 3
+        directory = selected_root / options.resume
+        checkpoint = ContentCheckpointStore(directory).load()
+        print("FULL EPISODE CONTENT PROVIDER STOP")
+        print("Stage: long_form_script_revision")
+        print("Status: provider_output_truncated")
+        print("Provider requests attempted this run: 1")
+        print("Successful provider calls this run: 0")
+        print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
+        print("Completed stage: no")
+        print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
+        return 3
     except (OSError, ValueError, FullEpisodeContentError, json.JSONDecodeError) as error:
         print(f"Full episode content generation failed safely: {error}", file=sys.stderr)
         return 1

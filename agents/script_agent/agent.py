@@ -2,13 +2,17 @@
 
 from pydantic import BaseModel
 
-from agents.script_agent.prompt import build_script_request
+from agents.script_agent.prompt import build_script_request, build_script_revision_request
 from shared.ai.base_agent import BaseAgent
+from shared.configuration import load_settings_section
 from shared.constants import SCRIPT_AGENT_NAME
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import ScriptLengthPolicy
+from shared.models.script_review import ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
+
+SCRIPT_MAX_OUTPUT_TOKENS = int(load_settings_section("script")["max_output_tokens"])
 
 
 class ScriptSourceReferenceError(ValueError):
@@ -33,6 +37,11 @@ class ScriptAgent(BaseAgent):
         """Require provider output to conform to the video script contract."""
         return VideoScript
 
+    @property
+    def max_output_tokens(self) -> int:
+        """Reserve bounded structured-output headroom without changing other agents."""
+        return SCRIPT_MAX_OUTPUT_TOKENS
+
     async def generate(
         self,
         concept: VideoConcept,
@@ -45,7 +54,33 @@ class ScriptAgent(BaseAgent):
         execution = await self.execute(
             build_script_request(concept, research, quality_feedback, policy, editorial_constraints)
         )
-        script = VideoScript.model_validate(execution.output)
+        return self._validate_script(VideoScript.model_validate(execution.output), research)
+
+    async def revise(
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        previous_script: VideoScript,
+        review: ScriptReview,
+        policy: ScriptLengthPolicy,
+        editorial_constraints: list[str],
+    ) -> VideoScript:
+        """Return one complete script from compact, authoritative revision context."""
+        execution = await self.execute(
+            build_script_revision_request(
+                concept,
+                research,
+                previous_script,
+                review,
+                policy,
+                editorial_constraints,
+            )
+        )
+        return self._validate_script(VideoScript.model_validate(execution.output), research)
+
+    @staticmethod
+    def _validate_script(script: VideoScript, research: ResearchPackage) -> VideoScript:
+        """Apply identical source and claim checks to generation and revision."""
         unverified_sources = {
             reference
             for section in script.sections

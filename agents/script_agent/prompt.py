@@ -4,7 +4,11 @@ from shared.ai.base_agent import AgentRequest
 from shared.constants import SCRIPT_AGENT_SYSTEM_PROMPT, SCRIPT_AGENT_USER_PROMPT
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import ScriptLengthPolicy
+from shared.models.script_review import ScriptReview
 from shared.models.video_concept import VideoConcept
+from shared.models.video_script import VideoScript
+
+SCRIPT_AGENT_REVISION_PROMPT = "script_agent/revision.md"
 
 
 def build_script_request(
@@ -34,6 +38,83 @@ def build_script_request(
             "active_script_constraints": _active_script_constraints(active_policy),
         },
     )
+
+
+def build_script_revision_request(
+    concept: VideoConcept,
+    research: ResearchPackage,
+    previous_script: VideoScript,
+    review: ScriptReview,
+    policy: ScriptLengthPolicy,
+    editorial_constraints: list[str],
+) -> AgentRequest:
+    """Build a compact revision request without duplicating full model metadata or review data."""
+    return AgentRequest(
+        prompt_name=SCRIPT_AGENT_REVISION_PROMPT,
+        system_prompt_name=SCRIPT_AGENT_SYSTEM_PROMPT,
+        context={
+            "video_concept": _without_base_metadata(concept.model_dump(mode="json")),
+            "research_package": _without_base_metadata(research.model_dump(mode="json")),
+            "allowed_source_references": research.references,
+            "rejected_script": _compact_script(previous_script),
+            "review_corrections": _compact_review(review),
+            "active_editorial_constraints": _active_editorial_constraints(editorial_constraints),
+            "active_script_constraints": _active_script_constraints(policy),
+        },
+    )
+
+
+def _compact_script(script: VideoScript) -> dict[str, object]:
+    """Keep complete authored content while dropping derived and lifecycle duplication."""
+    payload = script.model_dump(
+        mode="json",
+        exclude={
+            "created_at",
+            "updated_at",
+            "version",
+            "metadata",
+            "total_estimated_duration_seconds",
+            "estimated_word_count",
+        },
+    )
+    compact = _without_base_metadata(payload)
+    if not isinstance(compact, dict):  # Defensive guard for the recursive helper contract.
+        raise TypeError("Compacted script payload must remain an object.")
+    return compact
+
+
+def _compact_review(review: ScriptReview) -> dict[str, object]:
+    """Keep actionable rejection data once, excluding scores and non-blocking decoration."""
+    return {
+        "revision_summary": review.revision_summary,
+        "required_changes": review.required_changes,
+        "blocking_findings": review.blocking_findings,
+        "findings": [
+            {
+                "category": finding.category,
+                "severity": finding.severity,
+                "section_id": finding.section_id,
+                "message": finding.message,
+                "evidence": finding.evidence,
+                "recommended_change": finding.recommended_change,
+            }
+            for finding in review.findings
+            if finding.severity in {"warning", "critical"}
+        ],
+    }
+
+
+def _without_base_metadata(value: object) -> object:
+    """Recursively remove common lifecycle metadata that has no revision value."""
+    if isinstance(value, dict):
+        return {
+            key: _without_base_metadata(item)
+            for key, item in value.items()
+            if key not in {"created_at", "updated_at", "version", "metadata"}
+        }
+    if isinstance(value, list):
+        return [_without_base_metadata(item) for item in value]
+    return value
 
 
 def _active_editorial_constraints(editorial_constraints: list[str] | None) -> str:

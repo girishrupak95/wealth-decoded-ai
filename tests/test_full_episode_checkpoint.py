@@ -8,6 +8,7 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from pytest import CaptureFixture, MonkeyPatch
 
 from shared.content.checkpoint import ContentCheckpointStore
 from shared.content.full_episode import FullEpisodeContentError
@@ -21,6 +22,7 @@ from shared.content.workflow import (
     StoryboardGenerator,
     TopicGenerator,
 )
+from shared.exceptions.ai import OpenAIOutputTokenLimitError
 from shared.models.content_package import ContentRunStage, ContentRunStatus
 from tests.test_full_episode_content import content, review, script
 
@@ -32,6 +34,7 @@ def agents(
     scripts: Sequence[object],
     reviews: Sequence[object],
     storyboards: Sequence[object],
+    revisions: Sequence[object] = (),
 ) -> tuple[ContentAgents, dict[str, AsyncMock]]:
     """Build protocol-shaped async agents backed by inspectable local mocks."""
     fixture = content()
@@ -40,6 +43,7 @@ def agents(
         "concept": AsyncMock(return_value=fixture.concept),
         "research": AsyncMock(return_value=fixture.research),
         "script": AsyncMock(side_effect=list(scripts)),
+        "revision": AsyncMock(side_effect=list(revisions)),
         "review": AsyncMock(side_effect=list(reviews)),
         "storyboard": AsyncMock(side_effect=list(storyboards)),
     }
@@ -48,7 +52,10 @@ def agents(
             topic=cast(TopicGenerator, SimpleNamespace(discover=calls["topic"])),
             concept=cast(ConceptGenerator, SimpleNamespace(generate=calls["concept"])),
             research=cast(ResearchGenerator, SimpleNamespace(generate=calls["research"])),
-            script=cast(ScriptGenerator, SimpleNamespace(generate=calls["script"])),
+            script=cast(
+                ScriptGenerator,
+                SimpleNamespace(generate=calls["script"], revise=calls["revision"]),
+            ),
             reviewer=cast(ReviewGenerator, SimpleNamespace(review=calls["review"])),
             storyboard=cast(StoryboardGenerator, SimpleNamespace(generate=calls["storyboard"])),
         ),
@@ -102,7 +109,7 @@ async def test_partial_resume_validates_and_does_not_repeat_authoritative_stages
     assert checkpoint.current_stage == ContentRunStage.LONG_REVIEW
 
     revised = script(fixture.script.title, 700)
-    calls["script"].side_effect = [revised]
+    calls["revision"].side_effect = [revised]
     calls["review"].side_effect = [review(revised)]
     result = await workflow.revise(initial.directory)
 
@@ -112,16 +119,13 @@ async def test_partial_resume_validates_and_does_not_repeat_authoritative_stages
     assert calls["topic"].await_count == 1
     assert calls["concept"].await_count == 1
     assert calls["research"].await_count == 1
-    assert calls["script"].await_count == 2
+    assert calls["script"].await_count == 1
+    assert calls["revision"].await_count == 1
     assert calls["review"].await_count == 2
-    assert calls["script"].await_args is not None
-    feedback = calls["script"].await_args.kwargs["quality_feedback"]
-    revision_research = calls["script"].await_args.args[1]
+    assert calls["revision"].await_args is not None
+    revision_research = calls["revision"].await_args.args[1]
     assert revision_research.references == fixture.research.references
     assert revision_research.key_facts == fixture.research.key_facts
-    assert "REJECTED SCRIPT" in feedback
-    assert "AUTHORITATIVE REVIEW FEEDBACK" in feedback
-    assert "Revise the script." in feedback
     assert (initial.directory / "long-form/revisions/rejected-script.json").is_file()
     assert (initial.directory / "long-form/revisions/rejected-review.json").is_file()
     assert calls["storyboard"].await_count == 0
@@ -152,16 +156,84 @@ async def test_rejected_revision_stops_again_without_an_automatic_second_revisio
     workflow = ContentWorkflow(fake_agents, cli.workflow_settings(), report=lambda _: None)
     initial = await workflow.fresh(tmp_path)
     revised = script(fixture.script.title, 700)
-    calls["script"].side_effect = [revised]
+    calls["revision"].side_effect = [revised]
     calls["review"].side_effect = [review(revised, approved=False)]
 
     result = await workflow.revise(initial.directory)
 
     assert result.rejected
     assert result.checkpoint.provider_calls_this_run == 2
-    assert calls["script"].await_count == 2
+    assert calls["script"].await_count == 1
+    assert calls["revision"].await_count == 1
     assert calls["review"].await_count == 2
     assert calls["storyboard"].await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_truncated_revision_preserves_checkpoint_and_authoritative_artifacts(
+    tmp_path: Path,
+) -> None:
+    fixture = content()
+    rejected = review(fixture.script, approved=False)
+    fake_agents, calls = agents(scripts=[fixture.script], reviews=[rejected], storyboards=[])
+    workflow = ContentWorkflow(fake_agents, cli.workflow_settings(), report=lambda _: None)
+    initial = await workflow.fresh(tmp_path)
+    protected = {
+        name: (initial.directory / name).read_bytes()
+        for name in ("checkpoint.json", "long-form/script.json", "long-form/review.json")
+    }
+    calls["revision"].side_effect = OpenAIOutputTokenLimitError("truncated")
+
+    with pytest.raises(OpenAIOutputTokenLimitError):
+        await workflow.revise(initial.directory)
+
+    assert calls["revision"].await_count == 1
+    assert calls["review"].await_count == 1
+    for name, payload in protected.items():
+        assert (initial.directory / name).read_bytes() == payload
+    checkpoint = ContentCheckpointStore(initial.directory).load()
+    assert checkpoint.status == ContentRunStatus.REVIEW_REJECTED
+    assert checkpoint.provider_calls_completed == 5
+    assert not (initial.directory / "long-form/revisions").exists()
+
+
+@pytest.mark.asyncio
+async def test_cli_reports_controlled_provider_stop_without_traceback(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    fixture = content()
+    fake_agents, _ = agents(
+        scripts=[fixture.script],
+        reviews=[review(fixture.script, approved=False)],
+        storyboards=[],
+    )
+    initial = await ContentWorkflow(
+        fake_agents, cli.workflow_settings(), report=lambda _: None
+    ).fresh(tmp_path)
+    execute = AsyncMock(side_effect=OpenAIOutputTokenLimitError("truncated"))
+    monkeypatch.setattr(cli, "execute_workflow", execute)
+
+    code = await cli.async_main(
+        cli.parse_arguments(
+            [
+                "--resume",
+                str(initial.directory),
+                "--revise-rejected-script",
+                "--execute-provider",
+            ]
+        ),
+        root=tmp_path,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "FULL EPISODE CONTENT PROVIDER STOP" in captured.out
+    assert "provider_output_truncated" in captured.out
+    assert "Provider requests attempted this run: 1" in captured.out
+    assert "Successful provider calls this run: 0" in captured.out
+    assert "Traceback" not in captured.out + captured.err
 
 
 @pytest.mark.asyncio

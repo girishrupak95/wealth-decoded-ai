@@ -1,16 +1,21 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from agents.script_agent.agent import ScriptAgent
+from agents.script_agent.prompt import build_script_request, build_script_revision_request
+from agents.topic_agent.agent import TopicAgent
 from shared.ai.knowledge_loader import KnowledgeLoader
 from shared.ai.llm_client import LLMClient, LLMRequest
 from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
+from shared.configuration import load_settings_section
 from shared.exceptions.ai import OutputValidationError
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import short_production_fixture_policy
+from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 
@@ -129,6 +134,15 @@ def make_agent(tmp_path: Path, response: str) -> tuple[ScriptAgent, MockLLMClien
         "If no exact reference applies, use [] and set verification_required=true.",
         encoding="utf-8",
     )
+    (prompt_directory / "revision.md").write_text(
+        "AUTHORITATIVE CONCEPT $video_concept\n"
+        "AUTHORITATIVE RESEARCH $research_package\n"
+        "ALLOWED_SOURCE_REFERENCES $allowed_source_references\n"
+        "REJECTED SCRIPT $rejected_script\n"
+        "AUTHORITATIVE REVIEW CORRECTIONS $review_corrections\n"
+        "$active_editorial_constraints\n$active_script_constraints",
+        encoding="utf-8",
+    )
     knowledge_root = tmp_path / "knowledge"
     knowledge_root.mkdir()
     client = MockLLMClient(response)
@@ -159,6 +173,92 @@ async def test_script_agent_returns_validated_video_script(tmp_path: Path) -> No
     assert "alter a URL" in client.request.template
     assert "key_facts" in client.request.template
     assert "use [] and set verification_required=true" in client.request.template
+    assert client.request.max_output_tokens == 6000
+
+
+def rejected_review() -> ScriptReview:
+    """Return actionable revision context without unrelated optional metadata."""
+    return ScriptReview(
+        script_title="Emergency Fund Blueprint",
+        approved=False,
+        scores=ReviewScores(
+            hook_score=8,
+            accuracy_score=7,
+            structure_score=8,
+            retention_score=8,
+            clarity_score=8,
+            tone_score=8,
+            compliance_score=8,
+            overall_score=7,
+        ),
+        findings=[],
+        revision_summary="Shorten and correct the unsupported claim.",
+        required_changes=["Remove the unsupported household claim."],
+        optional_improvements=["Optional decorative suggestion."],
+        reviewed_at=datetime(2026, 8, 16, tzinfo=UTC),
+        reviewer_version="1.0",
+    )
+
+
+@pytest.mark.asyncio
+async def test_revision_uses_compact_context_and_script_specific_budget(tmp_path: Path) -> None:
+    agent, client = make_agent(tmp_path, json.dumps(script_payload()))
+    previous = VideoScript.model_validate(script_payload())
+
+    revised = await agent.revise(
+        make_concept(),
+        make_research(),
+        previous,
+        rejected_review(),
+        short_production_fixture_policy(),
+        ["Retain the disclaimer."],
+    )
+
+    assert revised.title == previous.title
+    assert client.request is not None
+    assert client.request.max_output_tokens == 6000
+    assert "REJECTED SCRIPT" in client.request.template
+    assert "Remove the unsupported household claim." in client.request.template
+    assert "Retain the disclaimer." in client.request.template
+    assert "Optional decorative suggestion." not in client.request.template
+    assert "hook_score" not in client.request.template
+    assert "created_at" not in client.request.template
+
+
+def test_revision_context_is_smaller_than_legacy_duplicated_feedback() -> None:
+    concept = make_concept()
+    research = make_research()
+    previous = VideoScript.model_validate(script_payload())
+    review = rejected_review()
+    policy = short_production_fixture_policy()
+    legacy = build_script_request(
+        concept,
+        research,
+        quality_feedback=(
+            previous.model_dump_json(indent=2) + "\n" + review.model_dump_json(indent=2)
+        ),
+        policy=policy,
+        editorial_constraints=["Retain the disclaimer."],
+    )
+    compact = build_script_revision_request(
+        concept,
+        research,
+        previous,
+        review,
+        policy,
+        ["Retain the disclaimer."],
+    )
+
+    assert len(json.dumps(compact.context)) < len(json.dumps(legacy.context))
+    assert compact.context["allowed_source_references"] == research.references
+    assert "rejected_script" in compact.context
+    assert "review_corrections" in compact.context
+
+
+def test_other_agents_keep_the_default_provider_budget() -> None:
+    topic_agent = object.__new__(TopicAgent)
+    assert topic_agent.max_output_tokens is None
+    assert load_settings_section("openai")["max_tokens"] == 4000
 
 
 @pytest.mark.asyncio

@@ -58,6 +58,16 @@ class ScriptGenerator(Protocol):
         editorial_constraints: list[str] | None = None,
     ) -> VideoScript: ...
 
+    async def revise(
+        self,
+        concept: VideoConcept,
+        research: ResearchPackage,
+        previous_script: VideoScript,
+        review: ScriptReview,
+        policy: ScriptLengthPolicy,
+        editorial_constraints: list[str],
+    ) -> VideoScript: ...
+
 
 class ReviewGenerator(Protocol):
     async def review(
@@ -194,22 +204,18 @@ class ContentWorkflow:
             context={"allow_legacy_unverified_exact_claims": True},
         )
         rejected_review = self._load(directory, stage, ScriptReview)
+        revised = await self.agents.script.revise(
+            concept,
+            research,
+            previous,
+            rejected_review,
+            policy,
+            constraints,
+        )
+        self._require_policy(revised, policy)
         archive = directory / STAGE_FILES[script_stage].parent / "revisions"
         await write_bytes_atomic(archive / "rejected-script.json", canonical_bytes(previous))
         await write_bytes_atomic(archive / "rejected-review.json", canonical_bytes(rejected_review))
-        feedback = (
-            "REJECTED SCRIPT:\n"
-            f"{previous.model_dump_json(indent=2)}\n\n"
-            "AUTHORITATIVE REVIEW FEEDBACK:\n"
-            f"{rejected_review.model_dump_json(indent=2)}"
-        )
-        revised = await self.agents.script.generate(
-            concept,
-            research,
-            quality_feedback=feedback,
-            policy=policy,
-            editorial_constraints=constraints,
-        )
         checkpoint = checkpoint.model_copy(
             update={
                 "current_stage": script_stage,
@@ -446,6 +452,18 @@ class ContentWorkflow:
     @staticmethod
     def _review_reason(review: ScriptReview) -> str:
         return "; ".join(review.required_changes) or review.revision_summary
+
+    @staticmethod
+    def _require_policy(script: VideoScript, policy: ScriptLengthPolicy) -> None:
+        """Stop before persistence/review when a revision violates authoritative bounds."""
+        totals = derived_script_totals(script, policy)
+        if not (
+            policy.min_words <= totals["spoken_word_count"] <= policy.max_words
+            and policy.min_duration_seconds
+            <= totals["duration_seconds"]
+            <= policy.max_duration_seconds
+        ):
+            raise ValueError("Revised script failed the authoritative length policy.")
 
     @staticmethod
     def _short_stages(
