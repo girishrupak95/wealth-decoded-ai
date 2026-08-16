@@ -33,7 +33,7 @@ from shared.content.workflow import (
     ContentWorkflowResult,
     ContentWorkflowSettings,
 )
-from shared.exceptions.ai import OpenAIOutputTokenLimitError
+from shared.exceptions.ai import OpenAIOutputTokenLimitError, OutputValidationError
 from shared.models.content_package import (
     ContentPackageManifest,
     ContentRunCheckpoint,
@@ -362,6 +362,29 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         print("Completed stage: no")
         print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
         return 3
+    except OutputValidationError as error:
+        if options.resume is None:
+            print(
+                "Full episode structured provider output failed validation safely.", file=sys.stderr
+            )
+            return 4
+        directory = selected_root / options.resume
+        checkpoint = ContentCheckpointStore(directory).load()
+        print("FULL EPISODE CONTENT VALIDATION STOP")
+        print(f"Stage: {provider_stop_stage(options, checkpoint)}")
+        print("Status: provider_output_invalid")
+        print("Provider requests attempted this run: 1")
+        print("Successful provider stage calls this run: 0")
+        print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
+        print("Completed stage: no")
+        print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
+        print("Reason:")
+        print("Structured provider output did not match the required schema.")
+        if error.error_count is not None:
+            print(f"Validation issues: {error.error_count}")
+        for issue in error.validation_issues[:5]:
+            print(f"- {issue.field_path}: {issue.message}")
+        return 4
     except (OSError, ValueError, FullEpisodeContentError, json.JSONDecodeError) as error:
         print(f"Full episode content generation failed safely: {error}", file=sys.stderr)
         return 1

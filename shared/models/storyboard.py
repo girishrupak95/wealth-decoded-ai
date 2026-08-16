@@ -58,7 +58,7 @@ class StoryboardScene(BaseModel):
     visual_asset_type: VisualAssetType
     visual_description: str
     generation_prompt: str | None
-    stock_search_terms: list[str]
+    stock_search_terms: list[str] = Field(default_factory=list)
     camera_direction: CameraDirection
     on_screen_text: list[str]
     transition_in: str

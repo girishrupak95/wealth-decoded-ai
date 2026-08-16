@@ -104,6 +104,15 @@ def storyboard(scenes: list[StoryboardScene]) -> Storyboard:
     )
 
 
+def test_chart_scene_defaults_stock_search_terms_to_empty() -> None:
+    payload = scene().model_dump(mode="python")
+    payload.pop("stock_search_terms")
+
+    parsed = StoryboardScene.model_validate(payload)
+
+    assert parsed.stock_search_terms == []
+
+
 def illustration_spec() -> dict[str, object]:
     return {
         "scene_type": "character",

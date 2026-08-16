@@ -22,7 +22,11 @@ from shared.content.workflow import (
     StoryboardGenerator,
     TopicGenerator,
 )
-from shared.exceptions.ai import OpenAIOutputTokenLimitError
+from shared.exceptions.ai import (
+    OpenAIOutputTokenLimitError,
+    OutputValidationError,
+    OutputValidationIssue,
+)
 from shared.models.content_package import (
     ContentRunCheckpoint,
     ContentRunStage,
@@ -341,8 +345,25 @@ def test_storyboard_preflights_report_bounded_mode_specific_workloads(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OpenAIOutputTokenLimitError("truncated"),
+        OutputValidationError(
+            "Structured output does not match the required schema.",
+            error_count=1,
+            validation_issues=(
+                OutputValidationIssue(
+                    field_path="scenes.2.stock_search_terms",
+                    error_type="missing",
+                    message="Field required",
+                ),
+            ),
+        ),
+    ],
+)
 async def test_long_storyboard_truncation_preserves_ready_checkpoint_and_stops_shorts(
-    tmp_path: Path,
+    tmp_path: Path, failure: Exception
 ) -> None:
     fixture = content()
     rejected = review(fixture.script, approved=False)
@@ -361,9 +382,9 @@ async def test_long_storyboard_truncation_preserves_ready_checkpoint_and_stops_s
         name: (initial.directory / name).read_bytes()
         for name in ("checkpoint.json", "long-form/script.json", "long-form/review.json")
     }
-    calls["storyboard"].side_effect = OpenAIOutputTokenLimitError("truncated")
+    calls["storyboard"].side_effect = failure
 
-    with pytest.raises(OpenAIOutputTokenLimitError):
+    with pytest.raises(type(failure)):
         await workflow.resume(initial.directory)
 
     assert calls["storyboard"].await_count == 1
@@ -379,6 +400,109 @@ async def test_long_storyboard_truncation_preserves_ready_checkpoint_and_stops_s
     assert ContentRunStage.LONG_STORYBOARD not in unchanged.completed_stages
     assert not (initial.directory / "long-form/storyboard.json").exists()
     assert not (initial.directory / "long-form/storyboard.md").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("completed", "expected"),
+    [
+        (list(ContentRunStage)[:5], "long_form_storyboard"),
+        (list(ContentRunStage)[:6], "short_01_script"),
+        (list(ContentRunStage)[:7], "short_01_review"),
+        (list(ContentRunStage)[:8], "short_01_storyboard"),
+        (list(ContentRunStage)[:9], "short_02_script"),
+        (list(ContentRunStage)[:10], "short_02_review"),
+        (list(ContentRunStage)[:11], "short_02_storyboard"),
+    ],
+)
+async def test_invalid_structured_output_is_a_safe_stage_aware_cli_stop(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    completed: list[ContentRunStage],
+    expected: str,
+) -> None:
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=completed[-1],
+        completed_stages=completed,
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+    )
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    validation_error = OutputValidationError(
+        "RAW_PROVIDER_PAYLOAD_MUST_NOT_APPEAR",
+        error_count=6,
+        validation_issues=(
+            OutputValidationIssue(
+                field_path="scenes.2.stock_search_terms",
+                error_type="missing",
+                message="Field required",
+            ),
+        ),
+    )
+    monkeypatch.setattr(cli, "execute_workflow", AsyncMock(side_effect=validation_error))
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--continue", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 4
+    assert "FULL EPISODE CONTENT VALIDATION STOP" in output
+    assert f"Stage: {expected}" in output
+    assert "Status: provider_output_invalid" in output
+    assert "Provider requests attempted this run: 1" in output
+    assert "Successful provider stage calls this run: 0" in output
+    assert "Historical completed provider calls: 11" in output
+    assert "Completed stage: no" in output
+    assert "scenes.2.stock_search_terms: Field required" in output
+    assert "RAW_PROVIDER_PAYLOAD_MUST_NOT_APPEAR" not in output
+    assert "Traceback" not in output
+
+
+@pytest.mark.asyncio
+async def test_invalid_script_revision_retains_revision_stage(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    completed = list(ContentRunStage)[:5]
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.LONG_REVIEW,
+        completed_stages=completed,
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.REVIEW_REJECTED,
+        rejection_stage=ContentRunStage.LONG_REVIEW,
+        rejection_reason="Revision required.",
+    )
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_workflow",
+        AsyncMock(side_effect=OutputValidationError("invalid")),
+    )
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--revise-rejected-script", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    assert code == 4
+    assert "Stage: long_form_script_revision" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio

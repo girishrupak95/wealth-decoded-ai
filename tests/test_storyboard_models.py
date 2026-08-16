@@ -43,10 +43,24 @@ def test_valid_storyboard_scene() -> None:
     assert scene.illustration_spec is None
 
 
-def test_stock_search_terms_remains_a_strict_required_field() -> None:
+def test_omitted_stock_search_terms_defaults_to_empty_for_non_stock_scene() -> None:
     payload = make_scene().model_dump(mode="python")
     payload.pop("stock_search_terms")
 
+    scene = StoryboardScene.model_validate(payload)
+
+    assert scene.stock_search_terms == []
+
+
+def test_explicit_stock_search_terms_round_trip_and_wrong_type_fails() -> None:
+    scene = make_scene(
+        visual_asset_type=VisualAssetType.STOCK_IMAGE,
+        stock_search_terms=["calm household budget planning"],
+    )
+    assert scene.model_dump(mode="json")["stock_search_terms"] == ["calm household budget planning"]
+
+    payload = make_scene().model_dump(mode="python")
+    payload["stock_search_terms"] = "not-an-array"
     with pytest.raises(ValidationError, match="stock_search_terms"):
         StoryboardScene.model_validate(payload)
 
@@ -58,8 +72,22 @@ def test_empty_stock_search_terms_validate_for_non_stock_scenes(
     scene = make_scene(
         visual_asset_type=asset_type,
         generation_prompt="Legacy image prompt" if asset_type == VisualAssetType.AI_IMAGE else None,
-        stock_search_terms=[],
     )
+    assert scene.stock_search_terms == []
+
+
+def test_illustration_scene_defaults_stock_search_terms_to_empty() -> None:
+    scene = make_scene(
+        visual_asset_type=VisualAssetType.AI_IMAGE,
+        generation_prompt="Concise legacy compatibility prompt.",
+        illustration_spec={
+            "scene_type": "character",
+            "purpose": "Show one calm financial decision.",
+            "description": "A saver reviews one clear choice.",
+            "character_ids": [],
+        },
+    )
+
     assert scene.stock_search_terms == []
 
 

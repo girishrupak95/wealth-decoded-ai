@@ -421,7 +421,7 @@ async def test_missing_scene_fields_persist_safe_ordered_validation_diagnostics(
 ) -> None:
     payload = fixture_payload()
     for scene in payload["scenes"]:
-        scene.pop("stock_search_terms")
+        scene.pop("sound_effects")
     payload["scenes"][0]["visual_description"] = "credential=do-not-persist"
     subject = dependencies(tmp_path, payload)
     concept, script, review = cli.fixed_inputs(ROOT)
@@ -442,7 +442,7 @@ async def test_missing_scene_fields_persist_safe_ordered_validation_diagnostics(
     assert manifest.failure_stage == "structured_output"
     assert manifest.validation_error_count == 5
     assert [item.field_path for item in manifest.storyboard_validation_errors] == [
-        f"scenes.{index}.stock_search_terms" for index in range(5)
+        f"scenes.{index}.sound_effects" for index in range(5)
     ]
     assert all(item.error_type == "missing" for item in manifest.storyboard_validation_errors)
     assert all(item.message == "Field required" for item in manifest.storyboard_validation_errors)

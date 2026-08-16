@@ -19,7 +19,7 @@ from shared.ai.prompt_loader import PromptLoader
 from shared.exceptions.ai import OutputValidationError, ScriptReviewNotApprovedError
 from shared.models.illustration import IllustrationAnimationType, IllustrationPaletteEmphasis
 from shared.models.script_review import ReviewScores, ScriptReview
-from shared.models.storyboard import CameraDirection, VisualAssetType
+from shared.models.storyboard import CameraDirection, Storyboard, StoryboardScene, VisualAssetType
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
 
@@ -388,6 +388,7 @@ def test_system_prompt_enumerates_complete_structured_output_contract() -> None:
         "verification_required",
         "production_notes",
         "illustration_spec",
+        "chart_spec",
     }
     storyboard_fields = {
         "title",
@@ -402,7 +403,17 @@ def test_system_prompt_enumerates_complete_structured_output_contract() -> None:
         "storyboard_version",
     }
     assert all(field in prompt for field in scene_fields | storyboard_fields)
+    required_scene_fields = {
+        name for name, field in StoryboardScene.model_fields.items() if field.is_required()
+    }
+    required_storyboard_fields = {
+        name for name, field in Storyboard.model_fields.items() if field.is_required()
+    }
+    assert required_scene_fields <= scene_fields
+    assert required_storyboard_fields <= storyboard_fields
     assert '"stock_search_terms": []' in prompt
+    assert 'Always emit "stock_search_terms" as a JSON array in every scene' in prompt
+    assert "Do not invent meaningless search phrases" in prompt
     assert "ai_image and typography scenes, stock_search_terms is normally []" in prompt
     assert "stock_image and stock_video require meaningful terms" in prompt
     assert "typography may use null and must use illustration_spec: null" in prompt
