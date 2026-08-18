@@ -1,15 +1,19 @@
 """Deterministic storyboard illustration-planning policy tests."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from shared.ai.knowledge_loader import KnowledgeLoader
-from shared.models.storyboard import StoryboardScene, VisualAssetType
-from shared.storyboard.validation import StoryboardValidationError
+from shared.models.storyboard import Storyboard, StoryboardScene, VisualAssetType
+from shared.storyboard.validation import StoryboardValidationError, calculate_storyboard_summary
 from shared.visual.character_resolver import CharacterResolver
-from shared.visual.illustration_storyboard_planner import IllustrationStoryboardPlanner
+from shared.visual.illustration_storyboard_planner import (
+    IllustrationMetadataValidationError,
+    IllustrationStoryboardPlanner,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 
@@ -67,6 +71,18 @@ def spec(scene_type: str = "character", **overrides: object) -> dict[str, object
     return values
 
 
+def storyboard(scenes: list[StoryboardScene]) -> Storyboard:
+    return Storyboard(
+        title="Illustration validation",
+        visual_style="Editorial",
+        scenes=scenes,
+        summary=calculate_storyboard_summary(scenes),
+        production_warnings=[],
+        generated_at=datetime(2026, 8, 18, tzinfo=UTC),
+        storyboard_version="1.0",
+    )
+
+
 @pytest.mark.parametrize(
     "scene_type",
     ["character", "metaphor", "object", "comparison", "progression", "environment", "data"],
@@ -100,6 +116,43 @@ def test_illustration_spec_requires_ai_image_asset_type() -> None:
 def test_unknown_character_id_fails_without_silent_repair() -> None:
     with pytest.raises(StoryboardValidationError, match="unknown character ID"):
         planner().validate_scene(scene(spec(character_ids=["RANDOM_99"])))
+
+
+def test_storyboard_validation_collects_scene_level_illustration_issues() -> None:
+    unknown = scene(spec(character_ids=["RANDOM_99"]))
+    exact = scene(spec("data", description="Show 10%"), scene_id="scene-2").model_copy(
+        update={"sequence_number": 2, "start_time_seconds": 5, "end_time_seconds": 10}
+    )
+
+    with pytest.raises(IllustrationMetadataValidationError) as captured:
+        planner().validate_storyboard(storyboard([unknown, exact]))
+
+    issues = captured.value.issues
+    assert issues[0].scene_index == 0
+    assert issues[0].scene_id == "scene-1"
+    assert issues[0].field_path == "scenes.0.illustration_spec.character_ids"
+    assert issues[0].rule_id == "unknown_canonical_character_id"
+    assert "RANDOM_99" in issues[0].message
+    assert issues[0].safe_context == {"character_id": "RANDOM_99"}
+    assert issues[1].scene_index == 1
+    assert issues[1].scene_id == "scene-2"
+    assert issues[1].field_path == "scenes.1.illustration_spec.description"
+    assert issues[1].rule_id == "exact_financial_value_forbidden"
+    assert "exact financial values" in issues[1].message
+
+
+def test_asset_compatibility_issue_is_structured_without_repair() -> None:
+    invalid = scene(spec("object")).model_copy(
+        update={"visual_asset_type": VisualAssetType.MOTION_GRAPHIC}
+    )
+
+    with pytest.raises(IllustrationMetadataValidationError) as captured:
+        planner().validate_storyboard(storyboard([invalid]))
+
+    issue = captured.value.issues[0]
+    assert issue.rule_id == "illustration_asset_type_mismatch"
+    assert issue.field_path == "scenes.0.illustration_spec"
+    assert issue.safe_context == {"visual_asset_type": "motion_graphic"}
 
 
 def test_character_order_and_adjacent_continuity_are_preserved() -> None:

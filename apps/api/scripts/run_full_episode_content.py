@@ -14,7 +14,11 @@ from agents.concept_agent.agent import ConceptAgent
 from agents.research_agent.agent import ResearchAgent
 from agents.reviewer_agent.agent import ReviewerAgent
 from agents.script_agent.agent import SCRIPT_MAX_OUTPUT_TOKENS, ScriptAgent
-from agents.storyboard_agent.agent import STORYBOARD_MAX_OUTPUT_TOKENS, StoryboardAgent
+from agents.storyboard_agent.agent import (
+    STORYBOARD_MAX_OUTPUT_TOKENS,
+    StoryboardAgent,
+    StoryboardIllustrationValidationError,
+)
 from agents.topic_agent.agent import TopicAgent
 
 from app.config.settings import OpenAISettings
@@ -235,6 +239,49 @@ async def persist_validation_snapshot(
     return snapshot
 
 
+async def persist_storyboard_metadata_snapshot(
+    directory: Path,
+    *,
+    stage: str,
+    checkpoint: ContentRunCheckpoint,
+    error: StoryboardIllustrationValidationError,
+) -> Path | None:
+    """Persist a schema-valid candidate and bounded illustration issues non-canonically."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    snapshot = directory / "diagnostics/provider-failures" / f"{timestamp}-{stage}"
+    report = {
+        "stage": stage,
+        "status": "storyboard_metadata_invalid",
+        "phase": error.phase,
+        "attempted_provider_requests_this_run": 1,
+        "successful_provider_stage_calls_this_run": 0,
+        "historical_completed_provider_calls": checkpoint.provider_calls_completed,
+        "issues": [
+            {
+                "scene_index": issue.scene_index,
+                "scene_id": issue.scene_id,
+                "field_path": issue.field_path,
+                "rule_id": issue.rule_id,
+                "message": issue.message,
+                "safe_context": issue.safe_context,
+            }
+            for issue in error.issues
+        ],
+    }
+    try:
+        await write_bytes_atomic(
+            snapshot / "storyboard-candidate.json",
+            json.dumps(error.storyboard.model_dump(mode="json"), indent=2, sort_keys=True).encode(),
+        )
+        await write_bytes_atomic(
+            snapshot / "validation.json",
+            json.dumps(report, indent=2, sort_keys=True).encode(),
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+    return snapshot
+
+
 def relative_diagnostic_path(path: Path, root: Path) -> Path:
     """Prefer a workspace-relative diagnostic location without exposing unrelated paths."""
     try:
@@ -416,6 +463,34 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         print("Completed stage: no")
         print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
         return 3
+    except StoryboardIllustrationValidationError as error:
+        if options.resume is None:
+            print("Storyboard illustration metadata failed validation safely.", file=sys.stderr)
+            return 4
+        directory = selected_root / options.resume
+        checkpoint = ContentCheckpointStore(directory).load()
+        stage = provider_stop_stage(options, checkpoint)
+        snapshot = await persist_storyboard_metadata_snapshot(
+            directory, stage=stage, checkpoint=checkpoint, error=error
+        )
+        print("FULL EPISODE CONTENT VALIDATION STOP")
+        print(f"Stage: {stage}")
+        print("Status: storyboard_metadata_invalid")
+        print(f"Phase: {error.phase}")
+        print("Provider requests attempted this run: 1")
+        print("Successful provider stage calls this run: 0")
+        print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
+        print("Completed stage: no")
+        print(f"Issues: {len(error.issues)}")
+        for metadata_issue in error.issues[:5]:
+            print(f"- {metadata_issue.field_path} [{metadata_issue.scene_id}]")
+            print(f"  rule: {metadata_issue.rule_id}")
+            print(f"  message: {metadata_issue.message}")
+        if snapshot is not None:
+            print("Diagnostic snapshot:")
+            print(relative_diagnostic_path(snapshot, selected_root))
+        print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
+        return 4
     except OutputValidationError as error:
         if options.resume is None:
             print(

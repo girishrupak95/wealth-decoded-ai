@@ -16,7 +16,11 @@ from shared.visual.chart_storyboard_validator import (
     ChartStoryboardReadinessError,
     ChartStoryboardValidator,
 )
-from shared.visual.illustration_storyboard_planner import IllustrationStoryboardPlanner
+from shared.visual.illustration_storyboard_planner import (
+    IllustrationMetadataIssue,
+    IllustrationMetadataValidationError,
+    IllustrationStoryboardPlanner,
+)
 
 STORYBOARD_MAX_OUTPUT_TOKENS = int(load_settings_section("storyboard")["max_output_tokens"])
 
@@ -24,10 +28,17 @@ STORYBOARD_MAX_OUTPUT_TOKENS = int(load_settings_section("storyboard")["max_outp
 class StoryboardIllustrationValidationError(ValueError):
     """A structurally valid storyboard failed deterministic illustration validation."""
 
-    def __init__(self, storyboard: Storyboard, cause: Exception) -> None:
+    def __init__(
+        self,
+        storyboard: Storyboard,
+        cause: Exception,
+        issues: tuple[IllustrationMetadataIssue, ...] = (),
+    ) -> None:
         super().__init__("Storyboard illustration metadata validation failed.")
         self.storyboard = storyboard
         self.cause = cause
+        self.issues = issues
+        self.phase = "illustration_metadata"
 
 
 class StoryboardChartValidationError(ValueError):
@@ -92,5 +103,5 @@ class StoryboardAgent(BaseAgent):
         planner = IllustrationStoryboardPlanner(CharacterResolver(self._knowledge_loader))
         try:
             return planner.validate_storyboard(storyboard)
-        except Exception as error:
-            raise StoryboardIllustrationValidationError(storyboard, error) from error
+        except IllustrationMetadataValidationError as error:
+            raise StoryboardIllustrationValidationError(storyboard, error, error.issues) from error

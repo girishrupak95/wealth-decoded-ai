@@ -660,11 +660,13 @@ class MixedProductionValidationService:
 
     @staticmethod
     def _illustration_failure_code(error: Exception) -> str:
-        message = str(error).casefold()
-        if "exact financial values" in message:
+        issues = getattr(error, "issues", ())
+        message = str(issues[0].message).casefold() if issues else str(error).casefold()
+        rule_id = str(getattr(issues[0], "rule_id", "")) if issues else ""
+        if rule_id == "exact_financial_value_forbidden" or "exact financial values" in message:
             return "unsafe_precise_data"
-        if "unknown character id" in message:
+        if rule_id == "unknown_canonical_character_id" or "unknown character id" in message:
             return "unknown_character_id"
-        if "only for ai_image" in message:
+        if rule_id == "illustration_asset_type_mismatch" or "only for ai_image" in message:
             return "illustration_spec_on_non_illustration_scene"
         return "illustration_spec_validation_failed"

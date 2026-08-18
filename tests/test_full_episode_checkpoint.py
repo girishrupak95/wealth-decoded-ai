@@ -9,6 +9,7 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from agents.storyboard_agent.agent import StoryboardIllustrationValidationError
 from pytest import CaptureFixture, MonkeyPatch
 
 from shared.content.checkpoint import ContentCheckpointStore
@@ -33,6 +34,7 @@ from shared.models.content_package import (
     ContentRunStage,
     ContentRunStatus,
 )
+from shared.visual.illustration_storyboard_planner import IllustrationMetadataIssue
 from tests.test_full_episode_content import content, review, script
 
 cli = importlib.import_module("apps.api.scripts.run_full_episode_content")
@@ -536,6 +538,81 @@ async def test_invalid_script_revision_retains_revision_stage(
 
     assert code == 4
     assert "Stage: long_form_script_revision" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_illustration_metadata_failure_persists_noncanonical_candidate_diagnostics(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    directory = tmp_path / "run"
+    directory.mkdir()
+    checkpoint_path = directory / "checkpoint.json"
+    checkpoint_path.write_bytes(b"authoritative-checkpoint")
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.LONG_REVIEW,
+        completed_stages=list(ContentRunStage)[:5],
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.READY_TO_CONTINUE,
+    )
+    candidate = content().storyboard
+    issues = tuple(
+        IllustrationMetadataIssue(
+            scene_index=index,
+            scene_id=f"scene_{index + 1:02d}",
+            field_path=f"scenes.{index}.illustration_spec.character_ids",
+            rule_id="unknown_canonical_character_id",
+            message=f"Character resolution failed: unknown character ID 'PERSON_{index + 1:02d}'.",
+            safe_context={"character_id": f"PERSON_{index + 1:02d}"},
+        )
+        for index in range(6)
+    )
+    failure = StoryboardIllustrationValidationError(candidate, ValueError("invalid"), issues)
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    monkeypatch.setattr(cli, "execute_workflow", AsyncMock(side_effect=failure))
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--continue", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 4
+    assert "Stage: long_form_storyboard" in output
+    assert "Status: storyboard_metadata_invalid" in output
+    assert "Phase: illustration_metadata" in output
+    assert "Provider requests attempted this run: 1" in output
+    assert "Successful provider stage calls this run: 0" in output
+    assert "Historical completed provider calls: 11" in output
+    assert "Issues: 6" in output
+    assert "scenes.0.illustration_spec.character_ids [scene_01]" in output
+    assert "unknown_canonical_character_id" in output
+    assert "scene_05" in output
+    assert "scene_06" not in output
+    assert "Traceback" not in output
+    assert "visual_style" not in output
+
+    snapshots = list((directory / "diagnostics/provider-failures").iterdir())
+    assert len(snapshots) == 1
+    validation = json.loads((snapshots[0] / "validation.json").read_text())
+    persisted = json.loads((snapshots[0] / "storyboard-candidate.json").read_text())
+    assert validation["phase"] == "illustration_metadata"
+    assert validation["status"] == "storyboard_metadata_invalid"
+    assert validation["issues"][0]["scene_id"] == "scene_01"
+    assert validation["issues"][0]["safe_context"] == {"character_id": "PERSON_01"}
+    assert persisted == candidate.model_dump(mode="json")
+    assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
+    assert not (directory / "long-form/storyboard.json").exists()
+    assert not (directory / "long-form/storyboard.md").exists()
+    assert not (directory / "manifest.json").exists()
 
 
 @pytest.mark.asyncio

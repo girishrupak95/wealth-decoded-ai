@@ -537,18 +537,24 @@ class IllustratedProductionValidationService:
 
     @staticmethod
     def _failure_code(error: Exception) -> str:
-        message = str(error).casefold()
+        issues = getattr(error, "issues", ())
+        message = str(issues[0].message).casefold() if issues else str(error).casefold()
+        rule_id = str(getattr(issues[0], "rule_id", "")) if issues else ""
         code = "illustration_spec_validation_failed"
-        if "unknown character id" in message:
+        if rule_id == "unknown_canonical_character_id" or "unknown character id" in message:
             code = "unknown_character_id"
-        elif "character illustration scenes require a canonical character id" in message:
+        elif rule_id == "character_id_required" or (
+            "character illustration scenes require a canonical character id" in message
+        ):
             code = "missing_declared_character_id"
-        elif "meaningful visual metaphor" in message:
+        elif rule_id == "visual_metaphor_required" or "meaningful visual metaphor" in message:
             code = "invalid_metaphor"
-        elif "exact financial values" in message:
+        elif rule_id == "exact_financial_value_forbidden" or "exact financial values" in message:
             code = "unsafe_precise_data"
-        elif "chart axes or labels" in message:
+        elif rule_id == "deterministic_chart_metadata_forbidden" or (
+            "chart axes or labels" in message
+        ):
             code = "unsafe_chart_content"
-        elif "provider-independent" in message:
+        elif rule_id == "provider_language_forbidden" or "provider-independent" in message:
             code = "provider_specific_illustration_spec"
         return code

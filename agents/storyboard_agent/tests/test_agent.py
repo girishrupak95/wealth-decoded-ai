@@ -361,6 +361,13 @@ def test_system_prompt_defines_selective_safe_illustration_planning() -> None:
     assert "exact currency amounts, percentages, durations, axes, chart labels" in prompt
     assert "never describe or invent character appearance" in prompt
     assert "provider-neutral editorial intent" in prompt
+    assert "illustration_spec is supported only when visual_asset_type is ai_image" in prompt
+    assert (
+        "character IllustrationSpec must include at least one exact canonical character_id"
+        in prompt
+    )
+    assert "metaphor IllustrationSpec must populate visual_metaphor" in prompt
+    assert "do not name image providers, APIs, or negative-prompt mechanisms" in prompt
 
 
 def test_system_prompt_enumerates_complete_structured_output_contract() -> None:
@@ -589,10 +596,17 @@ async def test_unknown_illustration_character_fails_after_single_call(tmp_path: 
     )
     agent, client = make_agent(tmp_path, json.dumps(payload))
 
-    with pytest.raises(StoryboardIllustrationValidationError, match="illustration metadata"):
+    with pytest.raises(
+        StoryboardIllustrationValidationError, match="illustration metadata"
+    ) as captured:
         await agent.generate(make_concept(), make_script(), make_review())
 
     assert client.calls == 1
+    assert captured.value.phase == "illustration_metadata"
+    assert captured.value.issues[0].scene_index == 0
+    assert captured.value.issues[0].scene_id == "scene-1"
+    assert captured.value.issues[0].field_path.endswith("illustration_spec.character_ids")
+    assert captured.value.issues[0].rule_id == "unknown_canonical_character_id"
 
 
 @pytest.mark.asyncio
