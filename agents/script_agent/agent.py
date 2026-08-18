@@ -101,4 +101,13 @@ class ScriptAgent(BaseAgent):
             for binding in section.claim_bindings
         ):
             raise ValueError("Claim bindings must identify their containing script section.")
+        if any(
+            binding.support_type.value == "source"
+            and binding.reference not in section.source_references
+            for section in script.sections
+            for binding in section.claim_bindings
+        ):
+            raise ValueError(
+                "Source claim bindings must use a reference listed on their containing section."
+            )
         return script

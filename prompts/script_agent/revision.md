@@ -6,11 +6,15 @@ Return JSON only. Do not explain your reasoning and do not return Markdown.
 AUTHORITATIVE CONCEPT
 $video_concept
 
+$asset_packaging_guidance
+
 AUTHORITATIVE RESEARCH
 $research_package
 
 ALLOWED_SOURCE_REFERENCES
 $allowed_source_references
+
+$claim_reference_guidance
 
 REJECTED SCRIPT
 $rejected_script

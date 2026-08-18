@@ -60,6 +60,8 @@ def build_script_revision_request(
             "review_corrections": _compact_review(review),
             "active_editorial_constraints": _active_editorial_constraints(editorial_constraints),
             "active_script_constraints": _active_script_constraints(policy),
+            "asset_packaging_guidance": _asset_packaging_guidance(policy),
+            "claim_reference_guidance": _claim_reference_guidance(),
         },
     )
 
@@ -135,6 +137,32 @@ def _active_editorial_constraints(editorial_constraints: list[str] | None) -> st
                 "active word/duration bounds, or the Pydantic schema."
             ),
         ]
+    )
+
+
+def _asset_packaging_guidance(policy: ScriptLengthPolicy) -> str:
+    if policy.profile_name != "derived_short":
+        return ""
+    return (
+        "DERIVED SHORT PACKAGING CONTRACT\n"
+        "This is a standalone derived Short, not the parent long-form episode. The supplied "
+        "VideoConcept is parent context, not a title source. Create or retain a standalone title "
+        "that packages only the Short's primary insight. Preserve an already-valid standalone "
+        "Short title during revision unless review feedback requires changing it. Do not copy the "
+        "parent title when it promises broader topics the Short does not explain. A second derived "
+        "Short must independently package its own different primary insight."
+    )
+
+
+def _claim_reference_guidance() -> str:
+    return (
+        "CLAIM-LEVEL REFERENCE CONTRACT\n"
+        "Correct only claim-reference mappings required by review. Copy every reference exactly "
+        "from ALLOWED_SOURCE_REFERENCES; never invent, shorten, rename, or substitute one. A "
+        "section may contain multiple claims supported by different references. Give distinct "
+        "claims distinct claim_bindings when their support responsibilities differ, and include "
+        "every bound source in that section's source_references. Keep claim_id, claim_summary, "
+        "support_type, reference, and section_id precise."
     )
 
 

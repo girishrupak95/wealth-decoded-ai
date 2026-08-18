@@ -355,6 +355,21 @@ def test_short_one_constraints_preserve_fee_drag_revision_target() -> None:
     assert "do not duplicate it" in guidance
     assert "one compact CTA/payoff line only" in guidance
     assert "subscription invitation is optional" in guidance
+    assert "standalone fee-drag Short" in guidance
+    assert "Do not reuse the broader parent episode title" in guidance
+    assert "Compound Interest Calculator reference" in guidance
+    assert "variable or negative returns" in guidance
+    assert "use two claim bindings" in guidance
+    assert "Past Performance" in guidance
+    assert "Here is the limit" in guidance
+
+
+def test_short_two_has_independent_standalone_title_contract() -> None:
+    guidance = " ".join(cli.workflow_settings().short_constraints[1])
+
+    assert "own standalone title" in guidance
+    assert "Do not blindly copy the broader parent episode title" in guidance
+    assert "distinct from the other derived Short" in guidance
 
 
 def test_short_storyboard_constraints_require_hypothetical_projection_label() -> None:

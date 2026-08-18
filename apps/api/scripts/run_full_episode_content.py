@@ -146,6 +146,24 @@ SHORT_CONSTRAINTS = (
             "be visual labels only, never spoken fragments."
         ),
         (
+            "Package this as a standalone fee-drag Short with its own narrow title. Do not reuse "
+            "the broader parent episode title. Preserve an already-valid standalone fee-drag "
+            "title during revision unless the review specifically requires a title correction."
+        ),
+        (
+            "For the smooth constant-rate projection section, create separate claim bindings: "
+            "bind the projection-as-illustration or calculator-assumptions claim to the exact "
+            "supplied Investor.gov Compound Interest Calculator reference, and bind variable or "
+            "negative returns to the exact supplied risk reference. For a sentence combining "
+            "calculator assumptions with a not-a-promise or future-results caution, use two "
+            "claim bindings: Calculator for assumptions and Investor.gov Past Performance for "
+            "future-results caution. Include every bound source in the section source list."
+        ),
+        (
+            "Replace generic spoken filler such as 'Here is the limit.' with a natural bridge that "
+            "directly advances how fees reduce the amount remaining invested."
+        ),
+        (
             "Keep 70-108 spoken words and 25-45 seconds, include the spoken educational "
             "disclaimer as the final disclaimer field, avoid individualized advice, and preserve "
             "variable or negative return caution where relevant. The disclaimer field is part of "
@@ -162,6 +180,11 @@ SHORT_CONSTRAINTS = (
     ],
     [
         "Create a standalone Short from the strongest practical or behavioral sub-idea.",
+        (
+            "Give this derived Short its own standalone title for its primary insight. Do not "
+            "blindly copy the broader parent episode title, and keep its packaging distinct from "
+            "the other derived Short."
+        ),
         "Use a different hook, insight, and payoff from the counterintuitive Short.",
         "Use only the supplied research and cite its exact references.",
     ],

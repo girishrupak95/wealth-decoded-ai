@@ -12,7 +12,11 @@ from shared.models.claim_verification import (
     ClaimVerificationStatus,
 )
 from shared.models.research import ResearchPackage
-from shared.models.script_policy import ScriptLengthPolicy, short_production_fixture_policy
+from shared.models.script_policy import (
+    ScriptLengthPolicy,
+    short_content_policy,
+    short_production_fixture_policy,
+)
 from shared.models.script_review import ReviewCategory, ReviewFinding, ReviewScores, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
@@ -199,6 +203,26 @@ async def test_short_policy_is_passed_to_reviewer_and_approves_compliant_script(
 
     assert reviewer.policy is policy
     assert artifacts.review.approved
+
+
+@pytest.mark.asyncio
+async def test_derived_short_parent_title_rejects_but_standalone_title_approves(
+    tmp_path: Path,
+) -> None:
+    service = ScriptReviewService(MockReviewer(), tmp_path, policy=short_content_policy())
+    parent_title = authoritative_short_script()
+    standalone = parent_title.model_copy(update={"title": "One Focused Short Insight"})
+
+    rejected = await service.review(
+        concept(), research(), parent_title, datetime(2026, 8, 3, tzinfo=UTC)
+    )
+    approved = await service.review(
+        concept(), research(), standalone, datetime(2026, 8, 4, tzinfo=UTC)
+    )
+
+    assert not rejected.review.approved
+    assert any("parent episode title" in finding.message for finding in rejected.review.findings)
+    assert approved.review.approved
 
 
 def authoritative_short_script() -> VideoScript:

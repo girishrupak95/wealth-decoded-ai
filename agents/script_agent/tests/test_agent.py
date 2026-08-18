@@ -14,7 +14,7 @@ from shared.ai.prompt_loader import PromptLoader
 from shared.configuration import load_settings_section
 from shared.exceptions.ai import OutputValidationError
 from shared.models.research import ResearchPackage
-from shared.models.script_policy import short_production_fixture_policy
+from shared.models.script_policy import short_content_policy, short_production_fixture_policy
 from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
@@ -255,6 +255,31 @@ def test_revision_context_is_smaller_than_legacy_duplicated_feedback() -> None:
     assert "review_corrections" in compact.context
 
 
+def test_derived_short_revision_preserves_standalone_packaging_and_exact_claim_sources() -> None:
+    request = build_script_revision_request(
+        make_concept(),
+        make_research(),
+        VideoScript.model_validate(script_payload()).model_copy(
+            update={"title": "A Standalone Safety-Net Insight"}
+        ),
+        rejected_review(),
+        short_content_policy(),
+        ["Create a standalone Short from one primary insight."],
+    )
+
+    packaging = request.context["asset_packaging_guidance"]
+    references = request.context["claim_reference_guidance"]
+    assert "standalone derived Short" in packaging
+    assert "parent context, not a title source" in packaging
+    assert "Preserve an already-valid standalone Short title" in packaging
+    assert "Do not copy the parent title" in packaging
+    assert request.context["rejected_script"]["title"] == "A Standalone Safety-Net Insight"
+    assert "distinct claim_bindings" in references
+    assert "different references" in references
+    assert "include every bound source" in references
+    assert request.context["allowed_source_references"] == make_research().references
+
+
 def test_other_agents_keep_the_default_provider_budget() -> None:
     topic_agent = object.__new__(TopicAgent)
     assert topic_agent.max_output_tokens is None
@@ -395,3 +420,28 @@ async def test_script_agent_allows_empty_references_with_verification_required(
     assert (await agent.generate(make_concept(), make_research())).sections[
         2
     ].source_references == []
+
+
+@pytest.mark.asyncio
+async def test_script_agent_rejects_bound_source_missing_from_section_source_list(
+    tmp_path: Path,
+) -> None:
+    payload = script_payload()
+    sections = payload["sections"]
+    assert isinstance(sections, list) and isinstance(sections[0], dict)
+    sections[0]["source_references"] = []
+    sections[0]["verification_required"] = True
+    sections[0]["claim_bindings"] = [
+        {
+            "claim_id": "claim-problem",
+            "section_id": "problem",
+            "claim_summary": "A sourced claim.",
+            "reference": EXACT_REFERENCE,
+            "support_type": "source",
+            "verification_status": "verified",
+        }
+    ]
+    agent, _ = make_agent(tmp_path, json.dumps(payload))
+
+    with pytest.raises(ValueError, match="containing section"):
+        await agent.generate(make_concept(), make_research())

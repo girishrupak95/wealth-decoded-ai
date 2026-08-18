@@ -79,7 +79,7 @@ class ScriptReviewService:
     ) -> ScriptReviewArtifacts:
         timestamp = reviewed_at or datetime.now(UTC)
         totals = self._authoritative_totals(script)
-        deterministic = self._precheck(script, research, totals)
+        deterministic = self._precheck(concept, script, research, totals)
         editorial = await self._review(concept, research, script, totals)
         editorial = self._remove_inconsistent_length_findings(editorial, totals)
         merged = self._merge(script, editorial, deterministic, timestamp)
@@ -155,11 +155,26 @@ class ScriptReviewService:
 
     def _precheck(
         self,
+        concept: VideoConcept,
         script: VideoScript,
         research: ResearchPackage,
         authoritative_totals: dict[str, int],
     ) -> list[ReviewFinding]:
         findings: list[ReviewFinding] = []
+        if (
+            self._policy.profile_name == "derived_short"
+            and script.title.casefold().strip() == concept.title.casefold().strip()
+        ):
+            findings.append(
+                self._finding(
+                    "structure",
+                    "critical",
+                    None,
+                    "Derived Short title duplicates the broader parent episode title.",
+                    script.title,
+                    "Use a standalone title that packages only the Short's primary insight.",
+                )
+            )
         word_count = authoritative_totals["spoken_word_count"]
         duration = authoritative_totals["duration_seconds"]
         if not self._policy.min_words <= word_count <= self._policy.max_words:
@@ -256,6 +271,34 @@ class ScriptReviewService:
                         "Use an exact reference from the validated research package.",
                     )
                 )
+            binding_references = [
+                binding.reference
+                for binding in section.claim_bindings
+                if binding.reference is not None
+            ]
+            for reference in binding_references:
+                if reference not in research.references:
+                    findings.append(
+                        self._finding(
+                            "sourcing",
+                            "critical",
+                            section.section_id,
+                            "Claim binding is not an exact research-package reference.",
+                            reference,
+                            "Use an exact supplied research reference without substitution.",
+                        )
+                    )
+                elif reference not in section.source_references:
+                    findings.append(
+                        self._finding(
+                            "sourcing",
+                            "critical",
+                            section.section_id,
+                            "Claim binding reference is absent from the section source list.",
+                            reference,
+                            "Add the exact bound reference to this section's source_references.",
+                        )
+                    )
             if (
                 section.verification_required
                 and not section.source_references
@@ -508,6 +551,7 @@ class ScriptReviewService:
         return finding.severity == "critical" and finding.category in {
             "accuracy",
             "sourcing",
+            "structure",
             "compliance",
         }
 
