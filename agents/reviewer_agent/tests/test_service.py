@@ -76,6 +76,40 @@ def script(
     )
 
 
+def fee_drag_service(tmp_path: Path) -> ScriptReviewService:
+    return ScriptReviewService(
+        MockReviewer(),
+        tmp_path,
+        editorial_constraints=["Create a standalone Short focused only on fee drag."],
+    )
+
+
+def test_fee_drag_precheck_rejects_inaccurate_compounding_phrase(tmp_path: Path) -> None:
+    source = script(
+        "Each recurring fee leaves less money in the remaining balance and available for "
+        "potential future growth."
+    ).model_copy(update={"hook": "Fees compound against you."})
+
+    findings = fee_drag_service(tmp_path)._fee_drag_findings(source)
+
+    assert any("must not be described" in finding.message for finding in findings)
+
+
+def test_fee_drag_precheck_requires_recurring_invested_base_mechanism(tmp_path: Path) -> None:
+    findings = fee_drag_service(tmp_path)._fee_drag_findings(script("Fees can affect results."))
+
+    assert any("mechanism is missing" in finding.message for finding in findings)
+
+
+def test_cautious_fee_drag_mechanism_passes_specialized_precheck(tmp_path: Path) -> None:
+    source = script(
+        "Each recurring fee leaves less money in the remaining balance and available for "
+        "potential future growth."
+    )
+
+    assert fee_drag_service(tmp_path)._fee_drag_findings(source) == []
+
+
 class MockReviewer:
     def __init__(self) -> None:
         self.policy: ScriptLengthPolicy | None = None

@@ -10,7 +10,9 @@ from agents.script_agent.service import ScriptGenerationService
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import (
     ScriptLengthPolicy,
+    derived_script_totals,
     long_form_policy,
+    short_content_policy,
     short_production_fixture_policy,
 )
 from shared.models.script_review import ReviewScores, ScriptReview
@@ -165,6 +167,21 @@ def test_default_and_short_policies_are_explicit_and_validated() -> None:
     assert not short.include_disclaimer_in_spoken_count
     with pytest.raises(ValueError):
         ScriptLengthPolicy(min_words=111, max_words=110)
+
+
+def test_derived_short_disclaimer_is_spoken_counted_and_extracted_once() -> None:
+    observed = observed_short_fixture_script()
+    policy = short_content_policy()
+    totals = derived_script_totals(observed, policy)
+
+    assert policy.include_disclaimer_in_spoken_count
+    assert observed.spoken_texts()[-1] == observed.disclaimer
+    assert observed.spoken_texts().count(observed.disclaimer) == 1
+    assert observed.narration_texts() == observed.spoken_texts()
+    assert totals["spoken_word_count"] == 90
+    assert totals["duration_seconds"] == 37
+    assert policy.min_words <= totals["spoken_word_count"] <= policy.max_words
+    assert policy.min_duration_seconds <= totals["duration_seconds"] <= policy.max_duration_seconds
 
 
 @pytest.mark.asyncio

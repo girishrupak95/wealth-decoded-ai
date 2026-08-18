@@ -197,6 +197,8 @@ class ScriptReviewService:
                     "State that the video is educational and not personalized financial advice.",
                 )
             )
+        if self._is_fee_drag_short():
+            findings.extend(self._fee_drag_findings(script))
         forbidden = ("guaranteed", "get rich quick", "risk-free")
         narrative = " ".join(script.narration_texts()).lower()
         for phrase in forbidden:
@@ -306,6 +308,60 @@ class ScriptReviewService:
                     "Duplicate narration sentence detected.",
                     sentence,
                     "Rewrite one repeated sentence to improve pacing.",
+                )
+            )
+        return findings
+
+    def _is_fee_drag_short(self) -> bool:
+        return any(
+            "focused only on fee drag" in item.casefold() for item in self._editorial_constraints
+        )
+
+    def _fee_drag_findings(self, script: VideoScript) -> list[ReviewFinding]:
+        """Apply bounded deterministic safeguards for the controlled fee-drag Short."""
+        findings: list[ReviewFinding] = []
+        spoken_without_disclaimer = " ".join(
+            script.spoken_texts(include_disclaimer=False)
+        ).casefold()
+        if "fees compound against you" in spoken_without_disclaimer:
+            findings.append(
+                self._finding(
+                    "accuracy",
+                    "critical",
+                    None,
+                    "Fee drag must not be described as fees compounding against the viewer.",
+                    "fees compound against you",
+                    "Explain that each fee leaves less money invested and available for potential "
+                    "future growth.",
+                )
+            )
+        remaining_base = any(
+            phrase in spoken_without_disclaimer
+            for phrase in (
+                "remain invested",
+                "remains invested",
+                "remaining balance",
+                "invested base",
+            )
+        )
+        future_growth = any(
+            phrase in spoken_without_disclaimer
+            for phrase in (
+                "potential future growth",
+                "potentially grow",
+                "available for future growth",
+            )
+        )
+        if "fee" not in spoken_without_disclaimer or not (remaining_base and future_growth):
+            findings.append(
+                self._finding(
+                    "accuracy",
+                    "critical",
+                    None,
+                    "The recurring fee-drag mechanism is missing from spoken narration.",
+                    "Fee mechanism not stated plainly.",
+                    "State cautiously that each fee leaves less money invested and therefore less "
+                    "available for potential future growth.",
                 )
             )
         return findings

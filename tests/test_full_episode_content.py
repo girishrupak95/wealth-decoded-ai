@@ -330,6 +330,41 @@ def test_long_form_closing_prompt_contract_prevents_oversized_final_scene() -> N
     assert "compound interest" not in guidance.casefold()
 
 
+def test_short_one_constraints_preserve_fee_drag_revision_target() -> None:
+    settings = cli.workflow_settings()
+    guidance = " ".join(settings.short_constraints[0])
+
+    assert "focused only on fee drag" in guidance
+    assert "smaller base available for potential future growth" in guidance
+    assert "Do not say that fees 'compound against you'" in guidance
+    assert "immediate counterintuitive tension" in guidance
+    assert "Do not add unsupported numbers" in guidance
+    assert "A smooth constant-rate projection is an illustration" in guidance
+    assert "Real returns can vary and can be negative" in guidance
+    assert "Do not call a calculator straight-line" in guidance
+    assert "taxes, inflation, or purchasing power as co-equal topics" in guidance
+    assert "action-led CTA" in guidance
+    assert "production-shorthand fragments" in guidance
+    assert "may be visual labels only, never spoken fragments" in guidance
+    assert "70-108 spoken words and 25-45 seconds" in guidance
+    assert "spoken educational disclaimer" in guidance
+    assert "avoid individualized advice" in guidance
+    assert "disclaimer field is part of the spoken narration sequence" in guidance
+    assert "not non-spoken metadata" in guidance
+    assert "Speak it exactly once" in guidance
+    assert "do not duplicate it" in guidance
+    assert "one compact CTA/payoff line only" in guidance
+    assert "subscription invitation is optional" in guidance
+
+
+def test_short_storyboard_constraints_require_hypothetical_projection_label() -> None:
+    guidance = cli.workflow_settings().short_storyboard_constraints
+
+    assert "projected or uneven return line" in guidance
+    assert "HYPOTHETICAL or ILLUSTRATIVE" in guidance
+    assert "numerical projection graphic" in guidance
+
+
 @pytest.mark.parametrize("count", [649, 801])
 def test_long_form_word_count_is_bounded(count: int) -> None:
     package = content()

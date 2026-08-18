@@ -117,8 +117,47 @@ LONG_EDITORIAL_CONSTRAINTS = [
 ]
 SHORT_CONSTRAINTS = (
     [
-        "Create a standalone Short from the strongest surprising or counterintuitive sub-idea.",
-        "Use one hook, one insight, and one payoff; do not recap the full episode.",
+        (
+            "Create a standalone Short focused only on fee drag: a recurring fee reduces the "
+            "amount that remains invested, leaving a smaller base available for potential future "
+            "growth. Do not say that fees 'compound against you'."
+        ),
+        (
+            "Open with immediate counterintuitive tension: a small investment fee does not only "
+            "reduce today's balance; it also removes money that could have remained invested and "
+            "potentially grown. Do not add unsupported numbers."
+        ),
+        (
+            "Use this calculator framing: 'A smooth constant-rate projection is an illustration. "
+            "Real returns can vary and can be negative.' Do not call a calculator straight-line."
+        ),
+        (
+            "Keep one primary insight and one fee-drag payoff. Do not explain taxes, inflation, or "
+            "purchasing power as co-equal topics; if mentioned, identify them only as other "
+            "assumptions a calculator may contain."
+        ),
+        (
+            "End with the fee-drag consequence and an action-led CTA to check the fees and "
+            "assumptions behind a projection before trusting its ending number."
+        ),
+        (
+            "Write conversational spoken narration, not production-shorthand fragments. Phrases "
+            "such as 'The overlooked limit:', 'Growth Needs a Base', and 'Fees Remove Fuel' may "
+            "be visual labels only, never spoken fragments."
+        ),
+        (
+            "Keep 70-108 spoken words and 25-45 seconds, include the spoken educational "
+            "disclaimer as the final disclaimer field, avoid individualized advice, and preserve "
+            "variable or negative return caution where relevant. The disclaimer field is part of "
+            "the spoken narration sequence and must fit inside the authoritative word and duration "
+            "totals; it is not non-spoken metadata. Speak it exactly once and do not duplicate it "
+            "inside section narration, the conclusion, or the CTA."
+        ),
+        (
+            "Use one compact CTA/payoff line only. Do not repeat the instruction to check fees and "
+            "projection assumptions in both the conclusion and CTA. A subscription invitation is "
+            "optional and must be omitted when it would crowd the fee explanation or disclaimer."
+        ),
         "Use only the supplied research and cite its exact references.",
     ],
     [
@@ -407,7 +446,9 @@ def workflow_settings() -> ContentWorkflowSettings:
         short_storyboard_constraints=(
             "Create 4-8 mobile-first scenes in 9:16 with large centered subjects, "
             "minimal text, and simplified deterministic charts where numbers matter. "
-            f"No scene may exceed {STORYBOARD_SCENE_MAX_SECONDS} seconds."
+            f"No scene may exceed {STORYBOARD_SCENE_MAX_SECONDS} seconds. Any projected or "
+            "uneven return line must visibly say HYPOTHETICAL or ILLUSTRATIVE. Do not show a "
+            "numerical projection graphic without that visible qualification."
         ),
         allowed_visual_types={
             VisualAssetType.AI_IMAGE,
