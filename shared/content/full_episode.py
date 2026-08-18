@@ -34,6 +34,9 @@ LONG_MIN_DURATION_SECONDS = LONG_POLICY.min_duration_seconds
 LONG_MAX_DURATION_SECONDS = LONG_POLICY.max_duration_seconds
 LONG_MIN_SCENES = 20
 LONG_MAX_SCENES = 35
+LONG_TYPICAL_SCENE_MIN_SECONDS = 5
+LONG_TYPICAL_SCENE_MAX_SECONDS = 12
+STORYBOARD_SCENE_MAX_SECONDS = 15
 SHORT_MIN_WORDS = SHORT_POLICY.min_words
 SHORT_MAX_WORDS = SHORT_POLICY.max_words
 SHORT_MIN_DURATION_SECONDS = SHORT_POLICY.min_duration_seconds
@@ -45,6 +48,34 @@ EXPECTED_PROVIDER_CALLS = 12
 
 class FullEpisodeContentError(ValueError):
     """A proposed production-content package failed deterministic QA."""
+
+
+@dataclass(frozen=True)
+class StoryboardPacingIssue:
+    """One bounded, scene-addressable storyboard pacing failure."""
+
+    scene_index: int
+    scene_id: str
+    field_path: str
+    rule_id: str
+    message: str
+    duration_seconds: int
+    start_seconds: int
+    end_seconds: int
+    maximum_seconds: int
+    visual_asset_type: str
+    safe_context: dict[str, str | int]
+
+
+class StoryboardPacingValidationError(FullEpisodeContentError):
+    """A schema-valid storyboard failed deterministic scene-density checks."""
+
+    phase = "scene_density"
+
+    def __init__(self, storyboard: Storyboard, issues: list[StoryboardPacingIssue]) -> None:
+        super().__init__("Storyboard scene density validation failed.")
+        self.storyboard = storyboard
+        self.issues = tuple(issues)
 
 
 @dataclass(frozen=True)
@@ -287,10 +318,28 @@ class FullEpisodeContentService:
             raise FullEpisodeContentError(f"{label} scene density is outside its target contract.")
         if storyboard.aspect_ratio != expected_aspect_ratio:
             raise FullEpisodeContentError(f"{label} aspect ratio must be {expected_aspect_ratio}.")
-        if any(
-            scene.end_time_seconds - scene.start_time_seconds > 15 for scene in storyboard.scenes
-        ):
-            raise FullEpisodeContentError(f"{label} contains an excessively long static scene.")
+        pacing_issues = [
+            StoryboardPacingIssue(
+                scene_index=index,
+                scene_id=scene.scene_id[:100],
+                field_path=f"scenes.{index}",
+                rule_id="scene_duration_exceeded",
+                message=(
+                    f"{label} storyboard scenes must not exceed "
+                    f"{STORYBOARD_SCENE_MAX_SECONDS} seconds."
+                ),
+                duration_seconds=scene.end_time_seconds - scene.start_time_seconds,
+                start_seconds=scene.start_time_seconds,
+                end_seconds=scene.end_time_seconds,
+                maximum_seconds=STORYBOARD_SCENE_MAX_SECONDS,
+                visual_asset_type=scene.visual_asset_type.value,
+                safe_context={"camera_direction": scene.camera_direction.value},
+            )
+            for index, scene in enumerate(storyboard.scenes)
+            if scene.end_time_seconds - scene.start_time_seconds > STORYBOARD_SCENE_MAX_SECONDS
+        ]
+        if pacing_issues:
+            raise StoryboardPacingValidationError(storyboard, pacing_issues)
         numeric = re.compile(r"(?:[$£€]\s*\d|\d+(?:[.,]\d+)?\s*%)")
         for scene in storyboard.scenes:
             exact_number = any(numeric.search(text) for text in scene.on_screen_text)

@@ -10,10 +10,12 @@ from pytest import CaptureFixture
 
 from shared.content.full_episode import (
     EXPECTED_PROVIDER_CALLS,
+    STORYBOARD_SCENE_MAX_SECONDS,
     FullEpisodeContentError,
     FullEpisodeContentInput,
     FullEpisodeContentService,
     ShortContentInput,
+    StoryboardPacingValidationError,
 )
 from shared.models.research import ResearchPackage
 from shared.models.script_review import ReviewScores, ScriptReview
@@ -235,6 +237,75 @@ def content() -> FullEpisodeContentInput:
 
 def test_full_length_targets_and_realistic_scene_density_pass() -> None:
     FullEpisodeContentService().validate(content())
+
+
+def test_scene_at_hard_duration_maximum_passes() -> None:
+    candidate = content().storyboard
+    scene = candidate.scenes[0]
+    scenes = [
+        scene.model_copy(
+            update={"end_time_seconds": scene.start_time_seconds + STORYBOARD_SCENE_MAX_SECONDS}
+        ),
+        *candidate.scenes[1:],
+    ]
+
+    FullEpisodeContentService._validate_storyboard(
+        candidate.model_copy(update={"scenes": scenes}),
+        minimum_scenes=20,
+        maximum_scenes=35,
+        expected_aspect_ratio="16:9",
+        label="Long-form",
+    )
+
+
+@pytest.mark.parametrize("camera_direction", [CameraDirection.STATIC, CameraDirection.PAN_LEFT])
+def test_scene_above_hard_maximum_reports_structured_pacing_issue(
+    camera_direction: CameraDirection,
+) -> None:
+    candidate = content().storyboard
+    scene = candidate.scenes[3]
+    scenes = list(candidate.scenes)
+    scenes[3] = scene.model_copy(
+        update={
+            "end_time_seconds": scene.start_time_seconds + STORYBOARD_SCENE_MAX_SECONDS + 1,
+            "camera_direction": camera_direction,
+        }
+    )
+
+    with pytest.raises(StoryboardPacingValidationError) as caught:
+        FullEpisodeContentService._validate_storyboard(
+            candidate.model_copy(update={"scenes": scenes}),
+            minimum_scenes=20,
+            maximum_scenes=35,
+            expected_aspect_ratio="16:9",
+            label="Long-form",
+        )
+
+    issue = caught.value.issues[0]
+    assert caught.value.phase == "scene_density"
+    assert issue.scene_index == 3
+    assert issue.scene_id == scene.scene_id
+    assert issue.field_path == "scenes.3"
+    assert issue.rule_id == "scene_duration_exceeded"
+    assert issue.duration_seconds == 16
+    assert issue.maximum_seconds == STORYBOARD_SCENE_MAX_SECONDS
+    assert issue.start_seconds == scene.start_time_seconds
+    assert issue.end_seconds == scene.start_time_seconds + 16
+    assert issue.visual_asset_type == scene.visual_asset_type.value
+    assert issue.safe_context == {"camera_direction": camera_direction.value}
+
+
+def test_workflow_storyboard_constraints_match_pacing_policy_and_limit_three() -> None:
+    settings = cli.workflow_settings()
+
+    assert "typical scenes to 5-12 seconds" in settings.long_storyboard_constraints
+    assert "no scene above 15 seconds" in settings.long_storyboard_constraints
+    assert "Split dense narration" in settings.long_storyboard_constraints
+    assert "do not invent movement to evade it" in settings.long_storyboard_constraints
+    assert "balance reductions" in settings.long_storyboard_constraints
+    assert "purchasing power" in settings.long_storyboard_constraints
+    assert "return uncertainty" in settings.long_storyboard_constraints
+    assert "No scene may exceed 15 seconds" in settings.short_storyboard_constraints
 
 
 @pytest.mark.parametrize("count", [649, 801])

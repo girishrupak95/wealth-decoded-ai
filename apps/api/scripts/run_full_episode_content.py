@@ -30,7 +30,11 @@ from shared.constants import DEFAULT_TOPIC_CATEGORY
 from shared.content.checkpoint import ContentCheckpointStore
 from shared.content.full_episode import (
     EXPECTED_PROVIDER_CALLS,
+    LONG_TYPICAL_SCENE_MAX_SECONDS,
+    LONG_TYPICAL_SCENE_MIN_SECONDS,
+    STORYBOARD_SCENE_MAX_SECONDS,
     FullEpisodeContentError,
+    StoryboardPacingValidationError,
 )
 from shared.content.workflow import (
     ContentAgents,
@@ -282,6 +286,54 @@ async def persist_storyboard_metadata_snapshot(
     return snapshot
 
 
+async def persist_storyboard_pacing_snapshot(
+    directory: Path,
+    *,
+    stage: str,
+    checkpoint: ContentRunCheckpoint,
+    error: StoryboardPacingValidationError,
+) -> Path | None:
+    """Persist a schema-valid pacing-invalid storyboard outside canonical artifacts."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    snapshot = directory / "diagnostics/provider-failures" / f"{timestamp}-{stage}"
+    report = {
+        "stage": stage,
+        "status": "storyboard_metadata_invalid",
+        "phase": error.phase,
+        "attempted_provider_requests_this_run": 1,
+        "successful_provider_stage_calls_this_run": 0,
+        "historical_completed_provider_calls": checkpoint.provider_calls_completed,
+        "issues": [
+            {
+                "scene_index": issue.scene_index,
+                "scene_id": issue.scene_id,
+                "field_path": issue.field_path,
+                "rule_id": issue.rule_id,
+                "message": issue.message,
+                "duration_seconds": issue.duration_seconds,
+                "start_seconds": issue.start_seconds,
+                "end_seconds": issue.end_seconds,
+                "maximum_seconds": issue.maximum_seconds,
+                "visual_asset_type": issue.visual_asset_type,
+                "safe_context": issue.safe_context,
+            }
+            for issue in error.issues
+        ],
+    }
+    try:
+        await write_bytes_atomic(
+            snapshot / "storyboard-candidate.json",
+            json.dumps(error.storyboard.model_dump(mode="json"), indent=2, sort_keys=True).encode(),
+        )
+        await write_bytes_atomic(
+            snapshot / "validation.json",
+            json.dumps(report, indent=2, sort_keys=True).encode(),
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+    return snapshot
+
+
 def relative_diagnostic_path(path: Path, root: Path) -> Path:
     """Prefer a workspace-relative diagnostic location without exposing unrelated paths."""
     try:
@@ -333,15 +385,20 @@ def workflow_settings() -> ContentWorkflowSettings:
         long_storyboard_constraints=(
             "Create 20-35 scenes in 16:9. Prefer one canonical recurring protagonist. "
             "Use IllustrationSpec for concepts and ChartSpec for exact numeric claims. "
-            "Keep typical scenes to 5-12 seconds and no scene above 15 seconds. Use at least "
-            "three visual modes and semantic motion intent only. Without changing or adding "
+            f"Keep typical scenes to {LONG_TYPICAL_SCENE_MIN_SECONDS}-"
+            f"{LONG_TYPICAL_SCENE_MAX_SECONDS} seconds and no scene above "
+            f"{STORYBOARD_SCENE_MAX_SECONDS} seconds. Split dense narration into additional "
+            "visual beats. A camera or motion label does not exempt a scene from the duration "
+            "limit; do not invent movement to evade it. Use at least three visual modes and "
+            "restrained semantic motion intent only. Without changing or adding "
             "narration, divide Limit Three visually into three beats: balance reductions (fees "
             "and general tax effect), purchasing power (inflation and nominal versus "
             "inflation-adjusted values), and return uncertainty (changing and negative returns)."
         ),
         short_storyboard_constraints=(
             "Create 4-8 mobile-first scenes in 9:16 with large centered subjects, "
-            "minimal text, and simplified deterministic charts where numbers matter."
+            "minimal text, and simplified deterministic charts where numbers matter. "
+            f"No scene may exceed {STORYBOARD_SCENE_MAX_SECONDS} seconds."
         ),
         allowed_visual_types={
             VisualAssetType.AI_IMAGE,
@@ -486,6 +543,37 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
             print(f"- {metadata_issue.field_path} [{metadata_issue.scene_id}]")
             print(f"  rule: {metadata_issue.rule_id}")
             print(f"  message: {metadata_issue.message}")
+        if snapshot is not None:
+            print("Diagnostic snapshot:")
+            print(relative_diagnostic_path(snapshot, selected_root))
+        print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
+        return 4
+    except StoryboardPacingValidationError as error:
+        if options.resume is None:
+            print("Storyboard scene density failed validation safely.", file=sys.stderr)
+            return 4
+        directory = selected_root / options.resume
+        checkpoint = ContentCheckpointStore(directory).load()
+        stage = provider_stop_stage(options, checkpoint)
+        snapshot = await persist_storyboard_pacing_snapshot(
+            directory, stage=stage, checkpoint=checkpoint, error=error
+        )
+        print("FULL EPISODE CONTENT VALIDATION STOP")
+        print(f"Stage: {stage}")
+        print("Status: storyboard_metadata_invalid")
+        print(f"Phase: {error.phase}")
+        print("Provider requests attempted this run: 1")
+        print("Successful provider stage calls this run: 0")
+        print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
+        print("Completed stage: no")
+        print(f"Issues: {len(error.issues)}")
+        for pacing_issue in error.issues[:5]:
+            print(f"- {pacing_issue.field_path} [{pacing_issue.scene_id}]")
+            print(f"  rule: {pacing_issue.rule_id}")
+            print(f"  duration: {pacing_issue.duration_seconds}s")
+            print(f"  maximum: {pacing_issue.maximum_seconds}s")
+            print(f"  visual_asset_type: {pacing_issue.visual_asset_type}")
+            print(f"  message: {pacing_issue.message}")
         if snapshot is not None:
             print("Diagnostic snapshot:")
             print(relative_diagnostic_path(snapshot, selected_root))

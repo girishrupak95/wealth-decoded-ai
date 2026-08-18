@@ -13,7 +13,11 @@ from agents.storyboard_agent.agent import StoryboardIllustrationValidationError
 from pytest import CaptureFixture, MonkeyPatch
 
 from shared.content.checkpoint import ContentCheckpointStore
-from shared.content.full_episode import FullEpisodeContentError
+from shared.content.full_episode import (
+    FullEpisodeContentError,
+    FullEpisodeContentService,
+    StoryboardPacingValidationError,
+)
 from shared.content.workflow import (
     ConceptGenerator,
     ContentAgents,
@@ -616,6 +620,80 @@ async def test_illustration_metadata_failure_persists_noncanonical_candidate_dia
 
 
 @pytest.mark.asyncio
+async def test_pacing_failure_persists_candidate_and_stops_before_canonical_stage(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    directory = tmp_path / "run"
+    directory.mkdir()
+    checkpoint_path = directory / "checkpoint.json"
+    checkpoint_path.write_bytes(b"authoritative-checkpoint")
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.LONG_REVIEW,
+        completed_stages=list(ContentRunStage)[:5],
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.READY_TO_CONTINUE,
+    )
+    candidate = content().storyboard
+    scene = candidate.scenes[4]
+    scenes = list(candidate.scenes)
+    scenes[4] = scene.model_copy(update={"end_time_seconds": scene.start_time_seconds + 16})
+    candidate = candidate.model_copy(update={"scenes": scenes})
+    with pytest.raises(StoryboardPacingValidationError) as caught:
+        FullEpisodeContentService._validate_storyboard(
+            candidate,
+            minimum_scenes=20,
+            maximum_scenes=35,
+            expected_aspect_ratio="16:9",
+            label="Long-form",
+        )
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    monkeypatch.setattr(cli, "execute_workflow", AsyncMock(side_effect=caught.value))
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--continue", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 4
+    assert "Stage: long_form_storyboard" in output
+    assert "Status: storyboard_metadata_invalid" in output
+    assert "Phase: scene_density" in output
+    assert "Provider requests attempted this run: 1" in output
+    assert "Successful provider stage calls this run: 0" in output
+    assert "Historical completed provider calls: 11" in output
+    assert "scenes.4 [scene-5]" in output
+    assert "rule: scene_duration_exceeded" in output
+    assert "duration: 16s" in output
+    assert "maximum: 15s" in output
+    assert "visual_asset_type:" in output
+    assert "Traceback" not in output
+    assert "visual_style" not in output
+
+    snapshots = list((directory / "diagnostics/provider-failures").iterdir())
+    assert len(snapshots) == 1
+    validation = json.loads((snapshots[0] / "validation.json").read_text())
+    persisted = json.loads((snapshots[0] / "storyboard-candidate.json").read_text())
+    assert validation["phase"] == "scene_density"
+    assert validation["issues"][0]["duration_seconds"] == 16
+    assert validation["issues"][0]["maximum_seconds"] == 15
+    assert persisted == candidate.model_dump(mode="json")
+    assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
+    assert not (directory / "long-form/storyboard.json").exists()
+    assert not (directory / "long-form/storyboard.md").exists()
+    assert not (directory / "manifest.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_diagnostic_write_failure_does_not_touch_checkpoint(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
@@ -648,6 +726,50 @@ async def test_diagnostic_write_failure_does_not_touch_checkpoint(
 
     assert snapshot is None
     assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
+
+
+@pytest.mark.asyncio
+async def test_pacing_diagnostic_write_failure_does_not_touch_checkpoint(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    directory = tmp_path / "run"
+    directory.mkdir()
+    checkpoint_path = directory / "checkpoint.json"
+    checkpoint_path.write_bytes(b"authoritative-checkpoint")
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.LONG_REVIEW,
+        completed_stages=list(ContentRunStage)[:5],
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.READY_TO_CONTINUE,
+    )
+    candidate = content().storyboard
+    scene = candidate.scenes[0]
+    scenes = list(candidate.scenes)
+    scenes[0] = scene.model_copy(update={"end_time_seconds": scene.start_time_seconds + 16})
+    candidate = candidate.model_copy(update={"scenes": scenes})
+    with pytest.raises(StoryboardPacingValidationError) as caught:
+        FullEpisodeContentService._validate_storyboard(
+            candidate,
+            minimum_scenes=20,
+            maximum_scenes=35,
+            expected_aspect_ratio="16:9",
+            label="Long-form",
+        )
+    monkeypatch.setattr(cli, "write_bytes_atomic", AsyncMock(side_effect=OSError("unavailable")))
+
+    snapshot = await cli.persist_storyboard_pacing_snapshot(
+        directory,
+        stage="long_form_storyboard",
+        checkpoint=checkpoint,
+        error=caught.value,
+    )
+
+    assert snapshot is None
+    assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
+    assert not (directory / "long-form/storyboard.json").exists()
 
 
 @pytest.mark.asyncio
