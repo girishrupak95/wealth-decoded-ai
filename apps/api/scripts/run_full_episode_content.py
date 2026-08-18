@@ -393,7 +393,16 @@ def workflow_settings() -> ContentWorkflowSettings:
             "restrained semantic motion intent only. Without changing or adding "
             "narration, divide Limit Three visually into three beats: balance reductions (fees "
             "and general tax effect), purchasing power (inflation and nominal versus "
-            "inflation-adjusted values), and return uncertainty (changing and negative returns)."
+            "inflation-adjusted values), and return uncertainty (changing and negative returns). "
+            "Closing scenes have no duration exemption: final, typography, CTA, disclaimer, and "
+            "contiguous-narration scenes must each remain within the same hard maximum. Treat the "
+            "checklist or takeaway recap, opening-hook or opening-question payoff, final "
+            "conclusion, CTA, and disclaimer or educational hold as independently splittable "
+            "visual beats. Do not pack multiple closing functions into one oversized final scene; "
+            "combine compatible beats only when the duration and text remain readable. A "
+            "disclaimer may receive its own final hold or share a concise CTA scene when neither "
+            "becomes overloaded. Divide approved narration across adjacent scenes in its original "
+            "order without rewriting, removing, duplicating, inventing, or reordering it."
         ),
         short_storyboard_constraints=(
             "Create 4-8 mobile-first scenes in 9:16 with large centered subjects, "

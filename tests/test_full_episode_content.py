@@ -308,6 +308,28 @@ def test_workflow_storyboard_constraints_match_pacing_policy_and_limit_three() -
     assert "No scene may exceed 15 seconds" in settings.short_storyboard_constraints
 
 
+def test_long_form_closing_prompt_contract_prevents_oversized_final_scene() -> None:
+    guidance = cli.workflow_settings().long_storyboard_constraints
+
+    assert "typical scenes to 5-12 seconds" in guidance
+    assert "no scene above 15 seconds" in guidance
+    assert "Closing scenes have no duration exemption" in guidance
+    assert "final, typography, CTA, disclaimer" in guidance
+    assert "contiguous-narration scenes" in guidance
+    assert "checklist or takeaway recap" in guidance
+    assert "opening-hook or opening-question payoff" in guidance
+    assert "final conclusion, CTA, and disclaimer or educational hold" in guidance
+    assert "Do not pack multiple closing functions into one oversized final scene" in guidance
+    assert "duration and text remain readable" in guidance
+    assert "own final hold or share a concise CTA scene" in guidance
+    assert "original order" in guidance
+    assert "without rewriting, removing, duplicating, inventing, or reordering it" in guidance
+    assert "do not invent movement to evade it" in guidance
+    assert "scene_25" not in guidance
+    assert "section_05" not in guidance
+    assert "compound interest" not in guidance.casefold()
+
+
 @pytest.mark.parametrize("count", [649, 801])
 def test_long_form_word_count_is_bounded(count: int) -> None:
     package = content()
