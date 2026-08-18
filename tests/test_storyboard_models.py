@@ -1,8 +1,12 @@
 """Tests for storyboard Pydantic contracts."""
 
-import pytest
-from pydantic import ValidationError
+import json
 
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from shared.ai.output_validator import OutputValidator
+from shared.exceptions.ai import OutputValidationError
 from shared.models.illustration import IllustrationSceneType, IllustrationSpec
 from shared.models.storyboard import CameraDirection, StoryboardScene, VisualAssetType
 
@@ -227,3 +231,37 @@ def test_invalid_scene_timing_is_rejected() -> None:
     """A scene must end after it starts."""
     with pytest.raises(ValidationError, match="end_time_seconds"):
         make_scene(start_time_seconds=6, end_time_seconds=6)
+
+
+class SceneEnvelope(BaseModel):
+    scenes: list[StoryboardScene]
+
+
+def test_model_validator_diagnostic_preserves_scene_path_id_type_and_message() -> None:
+    scene = make_scene().model_dump(mode="json")
+    scene["scene_id"] = "scene_05"
+    scene["visual_asset_type"] = "chart"
+
+    with pytest.raises(OutputValidationError) as captured:
+        OutputValidator().validate(json.dumps({"scenes": [scene]}), SceneEnvelope)
+
+    issue = captured.value.validation_issues[0]
+    assert issue.location == ("scenes", 0)
+    assert issue.field_path == "scenes.0"
+    assert issue.scene_id == "scene_05"
+    assert issue.error_type == "value_error"
+    assert "Chart scenes require chart_spec" in issue.message
+    assert captured.value.invalid_output == {"scenes": [scene]}
+
+
+def test_missing_scene_id_does_not_break_validation_diagnostics() -> None:
+    scene = make_scene().model_dump(mode="json")
+    scene.pop("scene_id")
+
+    with pytest.raises(OutputValidationError) as captured:
+        OutputValidator().validate(json.dumps({"scenes": [scene]}), SceneEnvelope)
+
+    issue = captured.value.validation_issues[0]
+    assert issue.location == ("scenes", 0, "scene_id")
+    assert issue.scene_id is None
+    assert issue.message == "Field required"

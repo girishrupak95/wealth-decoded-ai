@@ -6,6 +6,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from shared.models.content_package import (
 )
 from shared.models.script_policy import full_episode_policy, short_content_policy
 from shared.models.storyboard import VisualAssetType
+from shared.visual.processing import write_bytes_atomic
 
 DEFAULT_OUTPUT_ROOT = Path("generated/content-packages")
 LONG_POLICY = full_episode_policy()
@@ -187,6 +189,58 @@ def provider_stop_stage(options: argparse.Namespace, checkpoint: ContentRunCheck
         return f"{rejection_stage.value.removesuffix('_review')}_script_revision"
     stage = next_provider_stage(checkpoint)
     return stage.value if stage is not None else checkpoint.current_stage.value
+
+
+async def persist_validation_snapshot(
+    directory: Path,
+    *,
+    stage: str,
+    checkpoint: ContentRunCheckpoint,
+    error: OutputValidationError,
+) -> Path | None:
+    """Persist parsed provider output and bounded issues outside canonical stage artifacts."""
+    if error.invalid_output is None:
+        return None
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    snapshot = directory / "diagnostics/provider-failures" / f"{timestamp}-{stage}"
+    report = {
+        "stage": stage,
+        "status": "provider_output_invalid",
+        "attempted_provider_requests_this_run": 1,
+        "successful_provider_stage_calls_this_run": 0,
+        "historical_completed_provider_calls": checkpoint.provider_calls_completed,
+        "issues": [
+            {
+                "loc": list(issue.location),
+                "field_path": issue.field_path,
+                "scene_id": issue.scene_id,
+                "type": issue.error_type,
+                "message": issue.message,
+                "context": issue.context or {},
+            }
+            for issue in error.validation_issues
+        ],
+    }
+    try:
+        await write_bytes_atomic(
+            snapshot / "invalid-output.json",
+            json.dumps(error.invalid_output, indent=2, sort_keys=True).encode(),
+        )
+        await write_bytes_atomic(
+            snapshot / "validation.json",
+            json.dumps(report, indent=2, sort_keys=True).encode(),
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+    return snapshot
+
+
+def relative_diagnostic_path(path: Path, root: Path) -> Path:
+    """Prefer a workspace-relative diagnostic location without exposing unrelated paths."""
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
 
 
 def load_resume(path: Path) -> ContentPackageManifest:
@@ -370,8 +424,12 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
             return 4
         directory = selected_root / options.resume
         checkpoint = ContentCheckpointStore(directory).load()
+        stage = provider_stop_stage(options, checkpoint)
+        snapshot = await persist_validation_snapshot(
+            directory, stage=stage, checkpoint=checkpoint, error=error
+        )
         print("FULL EPISODE CONTENT VALIDATION STOP")
-        print(f"Stage: {provider_stop_stage(options, checkpoint)}")
+        print(f"Stage: {stage}")
         print("Status: provider_output_invalid")
         print("Provider requests attempted this run: 1")
         print("Successful provider stage calls this run: 0")
@@ -383,7 +441,13 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         if error.error_count is not None:
             print(f"Validation issues: {error.error_count}")
         for issue in error.validation_issues[:5]:
-            print(f"- {issue.field_path}: {issue.message}")
+            scene = f" [{issue.scene_id}]" if issue.scene_id else ""
+            print(f"- {issue.field_path}{scene}")
+            print(f"  type: {issue.error_type}")
+            print(f"  message: {issue.message}")
+        if snapshot is not None:
+            print("Diagnostic snapshot:")
+            print(relative_diagnostic_path(snapshot, selected_root))
         return 4
     except (OSError, ValueError, FullEpisodeContentError, json.JSONDecodeError) as error:
         print(f"Full episode content generation failed safely: {error}", file=sys.stderr)

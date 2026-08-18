@@ -419,6 +419,26 @@ def test_system_prompt_enumerates_complete_structured_output_contract() -> None:
     assert "typography may use null and must use illustration_spec: null" in prompt
 
 
+def test_system_prompt_matches_every_scene_cross_field_contract() -> None:
+    prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "AI image and video scenes require generation_prompt" in prompt
+    assert "Stock image and video scenes require stock_search_terms" in prompt
+    assert (
+        "Screenshot scenes require scene-level source_references or verification_required" in prompt
+    )
+    assert "chart_spec and leave illustration_spec null" in prompt
+    assert "generation_prompt null, and stock_search_terms empty" in prompt
+    assert "Non-chart scenes must use chart_spec: null" in prompt
+    assert "Never put both chart_spec and illustration_spec on one scene" in prompt
+    assert (
+        "typography may use null and must use illustration_spec: null and chart_spec: null"
+        in prompt
+    )
+
+
 def test_system_prompt_lists_exact_illustration_enum_literals() -> None:
     prompt = (Path(__file__).parents[3] / "prompts/storyboard_agent/system.md").read_text(
         encoding="utf-8"

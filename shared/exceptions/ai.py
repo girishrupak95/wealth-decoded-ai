@@ -1,6 +1,7 @@
 """Exceptions raised by the AI framework."""
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,9 @@ class OutputValidationIssue:
     field_path: str
     error_type: str
     message: str
+    location: tuple[str | int, ...] = ()
+    scene_id: str | None = None
+    context: dict[str, str | int | float | bool | None] | None = None
 
 
 class OutputValidationError(Exception):
@@ -21,10 +25,12 @@ class OutputValidationError(Exception):
         *,
         error_count: int | None = None,
         validation_issues: tuple[OutputValidationIssue, ...] = (),
+        invalid_output: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.error_count = error_count
         self.validation_issues = validation_issues
+        self.invalid_output = invalid_output
 
 
 class OpenAIRequestError(Exception):

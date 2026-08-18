@@ -1,6 +1,7 @@
 """Checkpoint, rejection, revision, and resume tests with zero provider calls."""
 
 import importlib
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -435,16 +436,26 @@ async def test_invalid_structured_output_is_a_safe_stage_aware_cli_stop(
         "ContentCheckpointStore",
         lambda _: SimpleNamespace(load=lambda: checkpoint),
     )
+    invalid_output = {
+        "scenes": [
+            {"scene_id": f"scene_{index:02d}", "private_scene_content": f"payload-{index}"}
+            for index in range(1, 7)
+        ]
+    }
     validation_error = OutputValidationError(
         "RAW_PROVIDER_PAYLOAD_MUST_NOT_APPEAR",
         error_count=6,
-        validation_issues=(
+        validation_issues=tuple(
             OutputValidationIssue(
-                field_path="scenes.2.stock_search_terms",
+                field_path=f"scenes.{index}",
                 error_type="missing",
                 message="Field required",
-            ),
+                location=("scenes", index),
+                scene_id=f"scene_{index + 1:02d}",
+            )
+            for index in range(6)
         ),
+        invalid_output=invalid_output,
     )
     monkeypatch.setattr(cli, "execute_workflow", AsyncMock(side_effect=validation_error))
 
@@ -462,9 +473,31 @@ async def test_invalid_structured_output_is_a_safe_stage_aware_cli_stop(
     assert "Successful provider stage calls this run: 0" in output
     assert "Historical completed provider calls: 11" in output
     assert "Completed stage: no" in output
-    assert "scenes.2.stock_search_terms: Field required" in output
+    assert "- scenes.0 [scene_01]" in output
+    assert "type: missing" in output
+    assert "message: Field required" in output
+    assert "scene_05" in output
+    assert "scene_06" not in output
     assert "RAW_PROVIDER_PAYLOAD_MUST_NOT_APPEAR" not in output
+    assert "private_scene_content" not in output
     assert "Traceback" not in output
+    snapshots = list((tmp_path / "run/diagnostics/provider-failures").iterdir())
+    assert len(snapshots) == 1
+    validation = json.loads((snapshots[0] / "validation.json").read_text())
+    persisted_output = json.loads((snapshots[0] / "invalid-output.json").read_text())
+    assert validation["stage"] == expected
+    assert validation["historical_completed_provider_calls"] == 11
+    assert validation["issues"][0] == {
+        "context": {},
+        "field_path": "scenes.0",
+        "loc": ["scenes", 0],
+        "message": "Field required",
+        "scene_id": "scene_01",
+        "type": "missing",
+    }
+    assert persisted_output == invalid_output
+    assert not (tmp_path / "run/long-form/storyboard.json").exists()
+    assert not (tmp_path / "run/long-form/storyboard.md").exists()
 
 
 @pytest.mark.asyncio
@@ -503,6 +536,41 @@ async def test_invalid_script_revision_retains_revision_stage(
 
     assert code == 4
     assert "Stage: long_form_script_revision" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_write_failure_does_not_touch_checkpoint(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    directory = tmp_path / "run"
+    directory.mkdir()
+    checkpoint_path = directory / "checkpoint.json"
+    checkpoint_path.write_bytes(b"authoritative-checkpoint")
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.LONG_REVIEW,
+        completed_stages=list(ContentRunStage)[:5],
+        provider_calls_completed=11,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.READY_TO_CONTINUE,
+    )
+    error = OutputValidationError(
+        "invalid",
+        error_count=1,
+        invalid_output={"scenes": [{"scene_id": "scene_05"}]},
+    )
+    monkeypatch.setattr(cli, "write_bytes_atomic", AsyncMock(side_effect=OSError("unavailable")))
+
+    snapshot = await cli.persist_validation_snapshot(
+        directory,
+        stage="long_form_storyboard",
+        checkpoint=checkpoint,
+        error=error,
+    )
+
+    assert snapshot is None
+    assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
 
 
 @pytest.mark.asyncio
