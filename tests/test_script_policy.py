@@ -203,7 +203,7 @@ def script_with_spoken_words(word_count: int) -> VideoScript:
     )
 
 
-@pytest.mark.parametrize("word_count", [70, 108])
+@pytest.mark.parametrize("word_count", [70, 101, 103, 108])
 def test_revised_short_exact_word_boundaries_pass(word_count: int) -> None:
     ContentWorkflow._require_policy(
         script_with_spoken_words(word_count),

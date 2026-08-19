@@ -38,6 +38,7 @@ from shared.content.full_episode import (
     StoryboardPacingValidationError,
 )
 from shared.content.workflow import (
+    SCRIPT_GENERATION_ONLY_PREFIX,
     ContentAgents,
     ContentWorkflow,
     ContentWorkflowResult,
@@ -118,7 +119,8 @@ LONG_EDITORIAL_CONSTRAINTS = [
     "Keep the opening-question payoff, disclaimer, restrained CTA, and reduce repetition.",
 ]
 SHORT_GENERATION_BUFFER_GUIDANCE = (
-    "GENERATION BUFFER: the authoritative hard range remains 70-108 spoken words, but target "
+    f"{SCRIPT_GENERATION_ONLY_PREFIX} GENERATION BUFFER: the authoritative hard range remains "
+    "70-108 spoken words, but target "
     "88-96 spoken words and treat 100 spoken words as the generation safety maximum. Before "
     "returning the final structured script, self-audit the complete spoken sequence—hook, intro, "
     "all section narration, conclusion, CTA, and disclaimer. Compress until it is no more than "
@@ -248,16 +250,16 @@ SHORT_CONSTRAINTS = (
         ),
         (
             "Use one complete conversational intro sentence that promises four checks: time, "
-            "contributions, costs, and purchasing power. Do not use 'Four checks:' or the "
-            "fragment 'Inspect the inputs first.'"
+            "contributions, costs, and purchasing power, without repeating the entire hook. Do "
+            "not use 'Four checks:' or the fragment 'Inspect the inputs first.'"
         ),
         (
-            "Include exactly one concise scenario explicitly described as hypothetical or "
-            "illustrative: a calculator may show an impressive future balance while assuming "
-            "steady returns, regular deposits, and no meaningful costs. Explain that the result "
-            "is an illustration, not a promise. Use the scenario only to establish why assumptions "
-            "matter; do not make it carry all four checks. Do not add exact amounts, return rates, "
-            "tax rates, inflation figures, or guaranteed-growth language."
+            "Make the hook or opening efficiently perform exactly one concise scenario, explicitly "
+            "described as hypothetical or illustrative: a calculator may show a convincing or "
+            "impressive future balance while assuming steady returns, regular deposits, and no "
+            "meaningful costs. Explain that the result is an illustration, not a promise. Do not "
+            "create a separate scenario later, imply a forecast, or add exact amounts, return "
+            "rates, tax rates, inflation figures, or guaranteed-growth language."
         ),
         (
             "Cover four checks accurately and concisely: more time gives compounding more "
@@ -280,16 +282,23 @@ SHORT_CONSTRAINTS = (
         (
             "End with one specific action-led CTA to check the time horizon, contributions, costs, "
             "and purchasing power before trusting the ending number. A subscription invitation is "
-            "optional and should be omitted when it weakens the practical payoff."
+            "prohibited. Do not use a standalone conclusion when the CTA already carries the "
+            "payoff; move directly from the final purchasing-power section to the CTA and then the "
+            "disclaimer."
         ),
         (
             "Remain inside the hard 70-108 word and 25-45 second Short policy. Keep the "
-            "educational disclaimer exactly once as the final spoken field. Improve wording by "
-            "replacing weak lines and compressing existing content; do not append extra "
-            "explanations on top of the current script."
+            "educational disclaimer exactly once as the final spoken field and make it a complete "
+            "grammatical sentence preserving educational-only, non-individualized-advice meaning. "
+            "Prefer the established concise wording, 'This is educational information, not "
+            "individualized financial advice.' Improve wording by replacing weak lines and "
+            "compressing existing content; do not append extra explanations on top of the current "
+            "script."
         ),
         (
-            "SHORT 2 COMPRESSION PRIORITY: remove redundant payoff sentences before the CTA; do "
+            f"{SCRIPT_GENERATION_ONLY_PREFIX} SHORT 2 COMPRESSION PRIORITY: prefer 88-94 spoken "
+            "words and solve the revision primarily through replacement and deletion. Remove "
+            "redundant payoff sentences before the CTA; do "
             "not explain the ending number twice; keep the single hypothetical scenario concise; "
             "give each of the four checks one spoken function; do not verbalize sourcing metadata; "
             "and do not add a subscription CTA. Compress equivalent setup and payoff statements "

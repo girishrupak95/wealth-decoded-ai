@@ -44,6 +44,7 @@ from shared.storyboard.validation import (
 from shared.visual.processing import write_bytes_atomic
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+SCRIPT_GENERATION_ONLY_PREFIX = "SCRIPT GENERATION ONLY:"
 
 
 @dataclass(frozen=True)
@@ -288,7 +289,7 @@ class ContentWorkflow:
             research,
             revised,
             policy=policy,
-            editorial_constraints=constraints,
+            editorial_constraints=self._reviewer_constraints(constraints),
             authoritative_totals=derived_script_totals(revised, policy),
         )
         checkpoint = await self._stage(store, checkpoint, stage, revised_review)
@@ -320,7 +321,7 @@ class ContentWorkflow:
                 concept,
                 research,
                 policy=self.settings.long_policy,
-                editorial_constraints=self.settings.long_constraints,
+                editorial_constraints=self._reviewer_constraints(self.settings.long_constraints),
             )
             checkpoint = await self._stage(
                 store,
@@ -387,7 +388,7 @@ class ContentWorkflow:
                 concept,
                 research,
                 policy=self.settings.short_policy,
-                editorial_constraints=constraints,
+                editorial_constraints=self._reviewer_constraints(constraints),
             )
             checkpoint = await self._stage(
                 store,
@@ -440,6 +441,15 @@ class ContentWorkflow:
             self.report("Aspect intent: 9:16")
         self.report(f"Structured output budget: {self.settings.storyboard_output_budget} tokens")
         self.report("Automatic provider retries: 0")
+
+    @staticmethod
+    def _reviewer_constraints(constraints: list[str]) -> list[str]:
+        """Exclude ScriptAgent-only generation targets from Reviewer context."""
+        return [
+            constraint
+            for constraint in constraints
+            if not constraint.startswith(SCRIPT_GENERATION_ONLY_PREFIX)
+        ]
 
     @staticmethod
     def _validate_storyboard_stage(

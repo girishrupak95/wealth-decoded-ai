@@ -430,6 +430,25 @@ def test_short_revision_prompt_has_hard_generation_buffer(short_index: int) -> N
     assert "Never append new explanation while retaining an equivalent payoff" in guidance
 
 
+@pytest.mark.parametrize("short_index", [0, 1])
+def test_short_generation_buffer_is_not_sent_to_reviewer(short_index: int) -> None:
+    constraints = cli.workflow_settings().short_constraints[short_index]
+    reviewer_guidance = " ".join(cli.ContentWorkflow._reviewer_constraints(constraints))
+
+    assert "SCRIPT GENERATION ONLY:" not in reviewer_guidance
+    assert "88-96" not in reviewer_guidance
+    assert "88-94" not in reviewer_guidance
+    assert "generation safety maximum" not in reviewer_guidance
+    assert "100 spoken words" not in reviewer_guidance
+    assert "70-108" in reviewer_guidance
+    assert "25-45" in reviewer_guidance
+    if short_index == 1:
+        assert "convincing or impressive future balance" in reviewer_guidance
+        assert "steady returns, regular deposits, and no meaningful costs" in reviewer_guidance
+        assert "investment returns can vary and can be negative" in reviewer_guidance
+        assert "exact supporting FINRA reference" in reviewer_guidance
+
+
 @pytest.mark.parametrize(
     ("stage", "asset"),
     [
@@ -481,8 +500,11 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "exactly one concise scenario" in guidance
     assert "hypothetical or illustrative" in guidance
     assert "an illustration, not a promise" in guidance
-    assert "do not make it carry all four checks" in guidance
-    assert "Do not add exact amounts, return rates, tax rates" in guidance
+    assert "convincing or impressive future balance" in guidance
+    assert "steady returns, regular deposits, and no meaningful costs" in guidance
+    assert "Do not create a separate scenario later" in guidance
+    assert "imply a forecast" in guidance
+    assert "add exact amounts, return rates, tax rates" in guidance
     assert "does not eliminate investment uncertainty" in guidance
     assert "investment returns can vary and can be negative" in guidance
     assert "exact supporting FINRA reference" in guidance
@@ -496,18 +518,24 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "Then check costs:" in guidance
     assert "Finally, ask nominal or inflation-adjusted:" in guidance
     assert "one specific action-led CTA" in guidance
-    assert "subscription invitation is optional" in guidance
+    assert "subscription invitation is prohibited" in guidance
     assert "hard 70-108 word and 25-45 second Short policy" in guidance
     assert "disclaimer exactly once as the final spoken field" in guidance
+    assert "complete grammatical sentence" in guidance
+    assert "This is educational information, not individualized financial advice" in guidance
     assert "replacing weak lines and compressing existing content" in guidance
     assert "do not append extra explanations" in guidance
-    assert "remove redundant payoff sentences before the CTA" in guidance
+    assert "Remove redundant payoff sentences before the CTA" in guidance
+    assert "prefer 88-94 spoken words" in guidance
+    assert "replacement and deletion" in guidance
     assert "do not explain the ending number twice" in guidance
     assert "keep the single hypothetical scenario concise" in guidance
     assert "each of the four checks one spoken function" in guidance
     assert "do not verbalize sourcing metadata" in guidance
     assert "do not add a subscription CTA" in guidance
     assert "Compress equivalent setup and payoff statements into one function" in guidance
+    assert "Do not use a standalone conclusion when the CTA already carries the payoff" in guidance
+    assert "final purchasing-power section to the CTA and then the disclaimer" in guidance
 
 
 def test_short_storyboard_constraints_require_hypothetical_projection_label() -> None:

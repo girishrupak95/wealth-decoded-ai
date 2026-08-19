@@ -269,6 +269,33 @@ def test_reviewer_guidance_distinguishes_calculation_and_research_support() -> N
     assert "requiring exact research references for research-backed factual claims" in guidance
 
 
+def test_reviewer_uses_only_authoritative_short_length_policy() -> None:
+    fixture = content()
+    request = build_reviewer_request(
+        fixture.concept,
+        fixture.research,
+        fixture.shorts[0].script,
+        policy=cli.SHORT_POLICY,
+        authoritative_totals={
+            "spoken_word_count": 103,
+            "duration_seconds": 43,
+            "minimum_words": 70,
+            "maximum_words": 108,
+            "minimum_duration_seconds": 25,
+            "maximum_duration_seconds": 45,
+        },
+    )
+    guidance = str(request.context["review_format_guidance"])
+    totals = str(request.context["authoritative_production_totals"])
+
+    assert "70-108 spoken words and 25-45 seconds" in guidance
+    assert "inside the active policy bounds passes deterministic length policy" in totals
+    assert "must not be rejected solely for length" in guidance
+    assert "generation target or safety target" in totals
+    assert "100" not in guidance
+    assert "100" not in totals
+
+
 def test_claim_language_stays_within_current_source_support() -> None:
     contribution = ClaimLanguageValidator.contribution_issue(
         "Contribution consistency is not equally controllable for every household."

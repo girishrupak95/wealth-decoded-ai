@@ -44,6 +44,8 @@ def _format_authoritative_totals(totals: dict[str, int]) -> str:
         "Do not recalculate or independently estimate these values.",
         "Do not issue findings claiming length or duration violates policy when these totals "
         "are within bounds.",
+        "A script inside the active policy bounds passes deterministic length policy. Do not "
+        "reject it solely for a ScriptAgent generation target or safety target.",
         "Judge pacing and editorial flow separately from deterministic length compliance.",
     ]
     return "\n".join(lines)
@@ -98,7 +100,11 @@ def _review_format_guidance(policy: ScriptLengthPolicy) -> str:
         f"ACTIVE SCRIPT LENGTH POLICY ({policy.profile_name}): judge this script within "
         f"{policy.min_words}-{policy.max_words} spoken words and "
         f"{policy.min_duration_seconds}-{policy.max_duration_seconds} seconds. Never require it "
-        "to exceed these maximums or substantially expand it when it already fits. Evaluate one "
+        "to exceed these maximums or substantially expand it when it already fits. Only these "
+        "active bounds govern deterministic length compliance. Script generation targets are not "
+        "editorial requirements and must never be described as mandatory, policy, compliance, "
+        "authoritative, or hard limits. A word count within the active range must not be rejected "
+        "solely for length. Evaluate one "
         "clear thesis, an effective hook, minimum evidence needed for claims, a useful practical "
         "takeaway, sourcing, and finance-safety requirements. For short-form content, omitted "
         "secondary research questions, counterarguments, examples, story-outline items, and "
