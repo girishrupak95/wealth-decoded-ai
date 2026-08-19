@@ -125,7 +125,10 @@ SHORT_CONSTRAINTS = (
         (
             "Open with immediate counterintuitive tension: a small investment fee does not only "
             "reduce today's balance; it also removes money that could have remained invested and "
-            "potentially grown. Do not add unsupported numbers."
+            "potentially grown. The first spoken hook must contain both ideas and stand alone as a "
+            "complete thought. Do not split an incomplete hook from a fragmentary intro, and do "
+            "not use the intro merely to finish or restate the hook. Do not add unsupported "
+            "numbers."
         ),
         (
             "Use this calculator framing: 'A smooth constant-rate projection is an illustration. "
@@ -143,7 +146,17 @@ SHORT_CONSTRAINTS = (
         (
             "Write conversational spoken narration, not production-shorthand fragments. Phrases "
             "such as 'The overlooked limit:', 'Growth Needs a Base', and 'Fees Remove Fuel' may "
-            "be visual labels only, never spoken fragments."
+            "be visual labels only, never spoken fragments. Make the spoken fields read as one "
+            "continuous documentary explanation with concise connective phrasing, not a sequence "
+            "of isolated production-note sentences."
+        ),
+        (
+            "Advance one logical progression without repeating the same smaller-base idea: hook "
+            "with fee-now plus lost-potential-growth tension; explain that compounding acts on the "
+            "balance remaining; show that recurring fees keep reducing the invested amount; add "
+            "the smooth-projection and variable-return caution; then finish with one payoff/action "
+            "line. Each beat must add new meaning. Avoid repeated variants of 'smaller base', "
+            "'less invested', 'less potential growth', or 'less to build on'."
         ),
         (
             "Package this as a standalone fee-drag Short with its own narrow title. Do not reuse "
@@ -172,9 +185,19 @@ SHORT_CONSTRAINTS = (
             "inside section narration, the conclusion, or the CTA."
         ),
         (
-            "Use one compact CTA/payoff line only. Do not repeat the instruction to check fees and "
-            "projection assumptions in both the conclusion and CTA. A subscription invitation is "
-            "optional and must be omitted when it would crowd the fee explanation or disclaimer."
+            "Use one compact final CTA/payoff line that combines the fee-drag consequence with the "
+            "action to inspect fees and projection assumptions. Do not state the consequence in a "
+            "separate conclusion and then repeat it in the CTA. The conclusion field may be empty "
+            "when the CTA carries the complete payoff; if used, it must add distinct value rather "
+            "than restate the CTA. Keep the spoken disclaimer separate and exactly once after this "
+            "line. A subscription invitation is optional and must be omitted when it would crowd "
+            "the fee explanation or disclaimer."
+        ),
+        (
+            "For a rejected revision, prioritize the review's required changes, preserve the "
+            "currently correct standalone title and exact claim-reference responsibilities, "
+            "improve natural spoken flow, and remain within policy. Do not broadly rewrite content "
+            "that already satisfies the review."
         ),
         "Use only the supplied research and cite its exact references.",
     ],

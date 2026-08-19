@@ -353,7 +353,7 @@ def test_short_one_constraints_preserve_fee_drag_revision_target() -> None:
     assert "not non-spoken metadata" in guidance
     assert "Speak it exactly once" in guidance
     assert "do not duplicate it" in guidance
-    assert "one compact CTA/payoff line only" in guidance
+    assert "one compact final CTA/payoff line" in guidance
     assert "subscription invitation is optional" in guidance
     assert "standalone fee-drag Short" in guidance
     assert "Do not reuse the broader parent episode title" in guidance
@@ -362,6 +362,37 @@ def test_short_one_constraints_preserve_fee_drag_revision_target() -> None:
     assert "use two claim bindings" in guidance
     assert "Past Performance" in guidance
     assert "Here is the limit" in guidance
+
+
+def test_short_one_revision_requires_conversational_single_payoff_flow() -> None:
+    guidance = " ".join(cli.workflow_settings().short_constraints[0])
+
+    assert "first spoken hook must contain both ideas" in guidance
+    assert "stand alone as a complete thought" in guidance
+    assert "Do not split an incomplete hook from a fragmentary intro" in guidance
+    assert "finish or restate the hook" in guidance
+    assert "one continuous documentary explanation" in guidance
+    assert "concise connective phrasing" in guidance
+    assert "one logical progression" in guidance
+    assert "compounding acts on the balance remaining" in guidance
+    assert "recurring fees keep reducing the invested amount" in guidance
+    assert "Each beat must add new meaning" in guidance
+    assert "Avoid repeated variants" in guidance
+    assert "one compact final CTA/payoff line" in guidance
+    assert "combines the fee-drag consequence" in guidance
+    assert "separate conclusion and then repeat it in the CTA" in guidance
+    assert "conclusion field may be empty" in guidance
+    assert "must add distinct value" in guidance
+    assert "spoken disclaimer separate and exactly once" in guidance
+    assert "subscription invitation is optional" in guidance
+    assert "preserve the currently correct standalone title" in guidance
+    assert "exact claim-reference responsibilities" in guidance
+    assert "Do not broadly rewrite content" in guidance
+    assert "70-108 spoken words and 25-45 seconds" in guidance
+    assert "taxes, inflation, or purchasing power as co-equal topics" in guidance
+    assert "fees 'compound against you'" in guidance
+    assert "The Hidden Cost of Investment Fees" not in guidance
+    assert "scene_" not in guidance
 
 
 def test_short_two_has_independent_standalone_title_contract() -> None:
