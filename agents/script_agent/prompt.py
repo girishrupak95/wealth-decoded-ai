@@ -183,7 +183,10 @@ def _asset_packaging_guidance(policy: ScriptLengthPolicy) -> str:
         "that packages only the Short's primary insight. Preserve an already-valid standalone "
         "Short title during revision unless review feedback requires changing it. Do not copy the "
         "parent title when it promises broader topics the Short does not explain. A second derived "
-        "Short must independently package its own different primary insight."
+        "Short must independently package its own different primary insight. The parent "
+        "VideoConcept supplies research context, not standalone packaging. Set "
+        "VideoScript.metadata.thumbnail_text to concise text owned by this Short's premise. Never "
+        "copy the parent concept's thumbnail_text into a semantically distinct derived Short."
     )
 
 

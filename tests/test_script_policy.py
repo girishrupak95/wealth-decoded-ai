@@ -7,12 +7,14 @@ import pytest
 from agents.reviewer_agent.service import ScriptReviewService
 from agents.script_agent.service import ScriptGenerationService
 
+from shared.content.full_episode import canonical_bytes
 from shared.content.workflow import (
     ContentWorkflow,
     RequiredRevisionBinding,
     RevisedScriptLengthError,
     RevisionPreReviewError,
     RevisionPreReviewRules,
+    with_short_thumbnail_text,
 )
 from shared.models.claim_verification import (
     ClaimReferenceBinding,
@@ -313,6 +315,49 @@ def test_revision_pre_review_gate_checks_exact_verified_binding() -> None:
         "claim_binding_not_verified:calculator_claim",
         "missing_section_source_reference:calculator_claim",
     )
+
+
+def test_derived_short_parent_thumbnail_leakage_aggregates_with_other_violations() -> None:
+    candidate = script().model_copy(
+        update={"title": "Wrong", "metadata": {"thumbnail_text": "PARENT PACKAGE"}}
+    )
+    rules = RevisionPreReviewRules(
+        exact_title="Standalone Short",
+        require_standalone_thumbnail_text=True,
+    )
+
+    with pytest.raises(RevisionPreReviewError) as caught:
+        ContentWorkflow._require_revision_contract(
+            candidate,
+            ContentRunStage.SHORT_02_SCRIPT,
+            rules,
+            parent_thumbnail_text="PARENT PACKAGE",
+        )
+
+    assert caught.value.violations == (
+        "exact_title_mismatch",
+        "derived_short_parent_metadata_leakage",
+    )
+
+
+def test_short_specific_thumbnail_is_accepted_and_metadata_correction_is_isolated() -> None:
+    original = script().model_copy(
+        update={"metadata": {"thumbnail_text": "PARENT PACKAGE", "retained": "value"}}
+    )
+    corrected = with_short_thumbnail_text(original, "Check the Calculator")
+
+    ContentWorkflow._require_revision_contract(
+        corrected,
+        ContentRunStage.SHORT_02_SCRIPT,
+        RevisionPreReviewRules(require_standalone_thumbnail_text=True),
+        parent_thumbnail_text="PARENT PACKAGE",
+    )
+    assert corrected.metadata == {
+        "thumbnail_text": "Check the Calculator",
+        "retained": "value",
+    }
+    assert corrected.model_dump(exclude={"metadata"}) == original.model_dump(exclude={"metadata"})
+    assert canonical_bytes(corrected) != canonical_bytes(original)
 
 
 @pytest.mark.parametrize("word_count", [60, 108])

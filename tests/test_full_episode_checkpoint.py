@@ -43,6 +43,7 @@ from shared.models.content_package import (
     ContentRunStage,
     ContentRunStatus,
 )
+from shared.models.video_script import VideoScript
 from shared.visual.illustration_storyboard_planner import IllustrationMetadataIssue
 from tests.test_full_episode_content import content, review, script
 
@@ -816,6 +817,47 @@ async def test_pre_review_failure_persists_all_violations_noncanonically(
     assert validation["reviewer_requests_this_run"] == 0
     assert validation["historical_completed_provider_calls"] == 35
     assert validation["violations"] == list(error.violations)
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_packaging_repair_reopens_review_without_provider_call(
+    tmp_path: Path,
+) -> None:
+    fixture = content()
+    rejected_short_review = review(fixture.shorts[0].script, approved=False)
+    fake_agents, calls = agents(
+        scripts=[fixture.script, fixture.shorts[0].script],
+        reviews=[fixture.review, rejected_short_review],
+        storyboards=[fixture.storyboard],
+    )
+    workflow = ContentWorkflow(fake_agents, cli.workflow_settings(), report=lambda _: None)
+    initial = await workflow.fresh(tmp_path)
+    script_path = initial.directory / "shorts/short-01/script.json"
+    before = VideoScript.model_validate_json(script_path.read_text())
+    checkpoint_before = ContentCheckpointStore(initial.directory).load()
+    review_calls_before = calls["review"].await_count
+
+    repaired = await cli.repair_rejected_short_packaging(
+        initial.directory,
+        "Standalone Emergency-Fund Check",
+        cli.workflow_settings(),
+    )
+    after = VideoScript.model_validate_json(script_path.read_text())
+
+    assert after.metadata["thumbnail_text"] == "Standalone Emergency-Fund Check"
+    assert after.model_dump(exclude={"metadata"}) == before.model_dump(exclude={"metadata"})
+    assert repaired.checkpoint.current_stage == ContentRunStage.SHORT_01_SCRIPT
+    assert repaired.checkpoint.status == ContentRunStatus.IN_PROGRESS
+    assert ContentRunStage.SHORT_01_REVIEW not in repaired.checkpoint.completed_stages
+    assert repaired.checkpoint.short_01_review_checksum is None
+    assert (
+        repaired.checkpoint.provider_calls_completed == checkpoint_before.provider_calls_completed
+    )
+    assert repaired.checkpoint.provider_calls_this_run == 0
+    assert calls["review"].await_count == review_calls_before
+    assert (
+        initial.directory / "shorts/short-01/revisions/pre-packaging-correction-script.json"
+    ).is_file()
 
 
 @pytest.mark.asyncio

@@ -47,6 +47,7 @@ from shared.content.workflow import (
     RevisedScriptLengthError,
     RevisionPreReviewError,
     RevisionPreReviewRules,
+    repair_rejected_short_packaging,
 )
 from shared.exceptions.ai import OpenAIOutputTokenLimitError, OutputValidationError
 from shared.models.content_package import (
@@ -368,6 +369,8 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--revise-rejected-script", action="store_true")
     action.add_argument("--continue", dest="continue_run", action="store_true")
+    action.add_argument("--repair-rejected-short-packaging", action="store_true")
+    parser.add_argument("--thumbnail-text")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args(arguments)
 
@@ -759,6 +762,7 @@ def workflow_settings() -> ContentWorkflowSettings:
                 require_grammatical_final_disclaimer=True,
                 forbid_subscription_cta=True,
                 forbid_spoken_label_colons=True,
+                require_standalone_thumbnail_text=True,
                 required_bindings=(
                     RequiredRevisionBinding(
                         section_id="check_time",
@@ -806,6 +810,22 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
     selected_root = root or Path.cwd()
     try:
         print_preflight()
+        if options.repair_rejected_short_packaging:
+            if options.resume is None or options.thumbnail_text is None:
+                raise ValueError("Packaging repair requires --resume and --thumbnail-text.")
+            result = await repair_rejected_short_packaging(
+                selected_root / options.resume,
+                options.thumbnail_text,
+                workflow_settings(),
+            )
+            print("DERIVED SHORT PACKAGING CORRECTED")
+            print(f"Stage: {result.checkpoint.current_stage.value}")
+            print("Changed field: metadata.thumbnail_text")
+            print("Narration and sourcing: unchanged")
+            print("Provider calls this run: 0")
+            print(f"Checkpoint: {result.directory / 'checkpoint.json'}")
+            print("Next action: rerun Reviewer with --continue --execute-provider")
+            return 0
         if options.revise_rejected_script:
             rejection_stage = None
             if options.resume is not None:

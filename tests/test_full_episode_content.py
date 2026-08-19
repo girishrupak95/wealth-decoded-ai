@@ -57,6 +57,7 @@ def script(title: str, count: int) -> VideoScript:
     ]
     return VideoScript(
         title=title,
+        metadata={"thumbnail_text": f"{title} thumbnail"},
         hook=words(10, f"{title_token}hook"),
         intro=words(10, "intro"),
         sections=sections,

@@ -8,7 +8,7 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from shared.content.checkpoint import STAGE_FILES, ContentCheckpointStore
+from shared.content.checkpoint import STAGE_CHECKSUM_FIELDS, STAGE_FILES, ContentCheckpointStore
 from shared.content.full_episode import (
     LONG_MAX_SCENES,
     LONG_MIN_SCENES,
@@ -95,6 +95,7 @@ class RevisionPreReviewRules:
     require_grammatical_final_disclaimer: bool = False
     forbid_subscription_cta: bool = False
     forbid_spoken_label_colons: bool = False
+    require_standalone_thumbnail_text: bool = False
     required_bindings: tuple[RequiredRevisionBinding, ...] = ()
 
 
@@ -215,6 +216,83 @@ class ContentWorkflowResult:
         return self.checkpoint.status == ContentRunStatus.REVIEW_REJECTED
 
 
+def with_short_thumbnail_text(script: VideoScript, thumbnail_text: str) -> VideoScript:
+    """Return a script with only its derived-Short thumbnail packaging changed."""
+    normalized = thumbnail_text.strip()
+    if not normalized:
+        raise ValueError("Derived Short thumbnail text must not be blank.")
+    metadata = dict(script.metadata)
+    metadata["thumbnail_text"] = normalized
+    corrected = script.model_copy(update={"metadata": metadata})
+    if corrected.model_dump(exclude={"metadata"}) != script.model_dump(exclude={"metadata"}):
+        raise FullEpisodeContentError("Metadata-only correction changed authored script content.")
+    return corrected
+
+
+async def repair_rejected_short_packaging(
+    directory: Path,
+    thumbnail_text: str,
+    settings: ContentWorkflowSettings,
+) -> ContentWorkflowResult:
+    """Apply one local thumbnail-only correction and reopen the rejected review stage."""
+    store = ContentCheckpointStore(directory)
+    checkpoint = store.load()
+    review_stage = checkpoint.rejection_stage
+    if checkpoint.status != ContentRunStatus.REVIEW_REJECTED or review_stage not in {
+        ContentRunStage.SHORT_01_REVIEW,
+        ContentRunStage.SHORT_02_REVIEW,
+    }:
+        raise ValueError("Checkpoint does not contain a rejected derived-Short review.")
+    index = 0 if review_stage == ContentRunStage.SHORT_01_REVIEW else 1
+    script_stage = (
+        ContentRunStage.SHORT_01_SCRIPT if index == 0 else ContentRunStage.SHORT_02_SCRIPT
+    )
+    script = VideoScript.model_validate_json(
+        (directory / STAGE_FILES[script_stage]).read_text(),
+        context={"allow_legacy_unverified_exact_claims": True},
+    )
+    concept = VideoConcept.model_validate_json(
+        (directory / STAGE_FILES[ContentRunStage.CONCEPT]).read_text()
+    )
+    corrected = with_short_thumbnail_text(script, thumbnail_text)
+    rules = settings.short_revision_rules[index] or RevisionPreReviewRules(
+        require_standalone_thumbnail_text=True
+    )
+    ContentWorkflow._require_revision_contract(
+        corrected,
+        script_stage,
+        rules,
+        parent_thumbnail_text=concept.thumbnail_text,
+    )
+    archive = directory / STAGE_FILES[script_stage].parent / "revisions"
+    await write_bytes_atomic(
+        archive / "pre-packaging-correction-script.json", canonical_bytes(script)
+    )
+    await write_bytes_atomic(
+        archive / "pre-packaging-correction-review.json",
+        (directory / STAGE_FILES[review_stage]).read_bytes(),
+    )
+    completed = [stage for stage in checkpoint.completed_stages if stage != review_stage]
+    review_checksum_field = STAGE_CHECKSUM_FIELDS[review_stage]
+    reopened = checkpoint.model_copy(
+        update={
+            "completed_stages": completed,
+            review_checksum_field: None,
+            "status": ContentRunStatus.IN_PROGRESS,
+            "rejection_stage": None,
+            "rejection_reason": None,
+        }
+    )
+    updated = await store.persist_stage(
+        reopened,
+        script_stage,
+        corrected,
+        markdown=FullEpisodeContentService._script_markdown(corrected),
+        provider_call=False,
+    )
+    return ContentWorkflowResult(directory, updated)
+
+
 class ContentWorkflow:
     """Run provider stages with an atomic checkpoint after every successful response."""
 
@@ -304,7 +382,12 @@ class ContentWorkflow:
             ]
         )
         if rules is not None:
-            self._require_revision_contract(revised, script_stage, rules)
+            self._require_revision_contract(
+                revised,
+                script_stage,
+                rules,
+                parent_thumbnail_text=concept.thumbnail_text,
+            )
         archive = directory / STAGE_FILES[script_stage].parent / "revisions"
         await write_bytes_atomic(archive / "rejected-script.json", canonical_bytes(previous))
         await write_bytes_atomic(archive / "rejected-review.json", canonical_bytes(rejected_review))
@@ -436,7 +519,13 @@ class ContentWorkflow:
                 concept,
                 research,
                 policy=self.settings.short_policy,
-                editorial_constraints=self._reviewer_constraints(constraints),
+                editorial_constraints=constraints,
+            )
+            self._require_revision_contract(
+                generated_script,
+                script_stage,
+                RevisionPreReviewRules(require_standalone_thumbnail_text=True),
+                parent_thumbnail_text=concept.thumbnail_text,
             )
             checkpoint = await self._stage(
                 store,
@@ -452,7 +541,7 @@ class ContentWorkflow:
                 research,
                 script,
                 policy=self.settings.short_policy,
-                editorial_constraints=constraints,
+                editorial_constraints=self._reviewer_constraints(constraints),
                 authoritative_totals=derived_script_totals(script, self.settings.short_policy),
             )
             checkpoint = await self._stage(store, checkpoint, review_stage, generated_review)
@@ -629,6 +718,8 @@ class ContentWorkflow:
         script: VideoScript,
         stage: ContentRunStage,
         rules: RevisionPreReviewRules,
+        *,
+        parent_thumbnail_text: str | None = None,
     ) -> None:
         """Aggregate mechanical editorial violations before canonical persistence/review."""
         violations: list[str] = []
@@ -656,6 +747,15 @@ class ContentWorkflow:
                 for text in script.spoken_texts()
             ):
                 violations.append("spoken_label_colon_present")
+        if rules.require_standalone_thumbnail_text:
+            thumbnail_text = script.metadata.get("thumbnail_text")
+            if not isinstance(thumbnail_text, str) or not thumbnail_text.strip():
+                violations.append("derived_short_thumbnail_text_missing")
+            elif (
+                parent_thumbnail_text is not None
+                and thumbnail_text.strip().casefold() == parent_thumbnail_text.strip().casefold()
+            ):
+                violations.append("derived_short_parent_metadata_leakage")
         sections = {section.section_id: section for section in script.sections}
         for requirement in rules.required_bindings:
             section = sections.get(requirement.section_id)

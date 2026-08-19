@@ -291,6 +291,10 @@ def test_derived_short_revision_preserves_standalone_packaging_and_exact_claim_s
     assert "parent context, not a title source" in packaging
     assert "Preserve an already-valid standalone Short title" in packaging
     assert "Do not copy the parent title" in packaging
+    assert "parent VideoConcept supplies research context, not standalone packaging" in packaging
+    assert "VideoScript.metadata.thumbnail_text" in packaging
+    assert "owned by this Short's premise" in packaging
+    assert "Never copy the parent concept's thumbnail_text" in packaging
     assert request.context["rejected_script"]["title"] == "A Standalone Safety-Net Insight"
     assert "distinct claim_bindings" in references
     assert "different references" in references
