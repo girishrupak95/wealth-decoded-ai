@@ -77,6 +77,44 @@ class RevisedScriptLengthError(FullEpisodeContentError):
         self.issue = issue
 
 
+@dataclass(frozen=True)
+class RequiredRevisionBinding:
+    """One exact mechanically verifiable claim-binding responsibility."""
+
+    section_id: str
+    claim_id: str
+    reference: str
+
+
+@dataclass(frozen=True)
+class RevisionPreReviewRules:
+    """Active mechanical requirements checked before editorial review."""
+
+    exact_title: str | None = None
+    require_empty_conclusion: bool = False
+    require_grammatical_final_disclaimer: bool = False
+    forbid_subscription_cta: bool = False
+    forbid_spoken_label_colons: bool = False
+    required_bindings: tuple[RequiredRevisionBinding, ...] = ()
+
+
+class RevisionPreReviewError(FullEpisodeContentError):
+    """A revised candidate failed aggregated mechanical editorial checks."""
+
+    phase = "revision_pre_review"
+
+    def __init__(
+        self,
+        stage: ContentRunStage,
+        candidate: VideoScript,
+        violations: tuple[str, ...],
+    ) -> None:
+        super().__init__("Revised script failed deterministic pre-review checks.")
+        self.stage = stage
+        self.candidate = candidate
+        self.violations = violations
+
+
 class TopicGenerator(Protocol):
     async def discover(self, category: str) -> list[TopicCandidate]: ...
 
@@ -161,6 +199,7 @@ class ContentWorkflowSettings:
     short_storyboard_constraints: str
     allowed_visual_types: set[VisualAssetType]
     storyboard_output_budget: int
+    short_revision_rules: tuple[RevisionPreReviewRules | None, RevisionPreReviewRules | None]
 
 
 @dataclass(frozen=True)
@@ -257,6 +296,15 @@ class ContentWorkflow:
             constraints,
         )
         self._require_policy(revised, policy, script_stage)
+        rules = (
+            None
+            if stage == ContentRunStage.LONG_REVIEW
+            else self.settings.short_revision_rules[
+                0 if stage == ContentRunStage.SHORT_01_REVIEW else 1
+            ]
+        )
+        if rules is not None:
+            self._require_revision_contract(revised, script_stage, rules)
         archive = directory / STAGE_FILES[script_stage].parent / "revisions"
         await write_bytes_atomic(archive / "rejected-script.json", canonical_bytes(previous))
         await write_bytes_atomic(archive / "rejected-review.json", canonical_bytes(rejected_review))
@@ -575,6 +623,62 @@ class ContentWorkflow:
                     violations=tuple(violations),
                 ),
             )
+
+    @staticmethod
+    def _require_revision_contract(
+        script: VideoScript,
+        stage: ContentRunStage,
+        rules: RevisionPreReviewRules,
+    ) -> None:
+        """Aggregate mechanical editorial violations before canonical persistence/review."""
+        violations: list[str] = []
+        if rules.exact_title is not None and script.title != rules.exact_title:
+            violations.append("exact_title_mismatch")
+        if rules.require_empty_conclusion and script.conclusion.strip():
+            violations.append("standalone_conclusion_present")
+        if rules.forbid_subscription_cta and "subscrib" in script.cta.casefold():
+            violations.append("subscription_cta_present")
+        if rules.require_grammatical_final_disclaimer:
+            disclaimer = script.disclaimer.strip()
+            other_spoken = script.spoken_texts()[:-1]
+            if (
+                not disclaimer
+                or disclaimer[-1:] not in {".", "!", "?"}
+                or not disclaimer[:1].isupper()
+            ):
+                violations.append("disclaimer_not_grammatical")
+            if sum(text.count(disclaimer) for text in other_spoken if disclaimer) != 0:
+                violations.append("disclaimer_not_exactly_once_final")
+        if rules.forbid_spoken_label_colons:
+            forbidden_starts = ("check ", "separate ", "four checks")
+            if any(
+                ":" in text and text.casefold().lstrip().startswith(forbidden_starts)
+                for text in script.spoken_texts()
+            ):
+                violations.append("spoken_label_colon_present")
+        sections = {section.section_id: section for section in script.sections}
+        for requirement in rules.required_bindings:
+            section = sections.get(requirement.section_id)
+            if section is None:
+                violations.append(f"missing_required_section:{requirement.section_id}")
+                continue
+            matching = [
+                binding
+                for binding in section.claim_bindings
+                if binding.claim_id == requirement.claim_id
+            ]
+            if not matching:
+                violations.append(f"missing_required_claim_binding:{requirement.claim_id}")
+                continue
+            binding = matching[0]
+            if binding.reference != requirement.reference:
+                violations.append(f"incorrect_claim_reference:{requirement.claim_id}")
+            if binding.verification_status != "verified":
+                violations.append(f"claim_binding_not_verified:{requirement.claim_id}")
+            if requirement.reference not in section.source_references:
+                violations.append(f"missing_section_source_reference:{requirement.claim_id}")
+        if violations:
+            raise RevisionPreReviewError(stage, script, tuple(violations))
 
     @staticmethod
     def _short_stages(

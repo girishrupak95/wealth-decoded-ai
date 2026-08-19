@@ -43,7 +43,10 @@ from shared.content.workflow import (
     ContentWorkflow,
     ContentWorkflowResult,
     ContentWorkflowSettings,
+    RequiredRevisionBinding,
     RevisedScriptLengthError,
+    RevisionPreReviewError,
+    RevisionPreReviewRules,
 )
 from shared.exceptions.ai import OpenAIOutputTokenLimitError, OutputValidationError
 from shared.models.content_package import (
@@ -285,7 +288,8 @@ SHORT_CONSTRAINTS = (
             "TRACEABILITY FOR THE FACTUAL HOOK MECHANISM: hook is a plain string and cannot own "
             "source_references or claim_bindings. Do not request or create a hook-level binding. "
             "Use the existing closest materially relevant ScriptSection, check_time, without "
-            "adding a new section. Add or update one stable, descriptive claim_id whose "
+            "adding a new section. Add or update the stable claim_id="
+            "calculator_assumptions_shape_displayed_balance, whose "
             "claim_summary materially represents that the calculator's displayed future balance "
             "depends on entered return, recurring-contribution, time, and cost assumptions and is "
             "illustrative rather than guaranteed. Set section_id=check_time, support_type=source, "
@@ -626,6 +630,43 @@ async def persist_script_length_snapshot(
     return snapshot
 
 
+async def persist_revision_pre_review_snapshot(
+    directory: Path,
+    *,
+    checkpoint: ContentRunCheckpoint,
+    error: RevisionPreReviewError,
+) -> Path | None:
+    """Persist an editorial-gate-invalid candidate without changing canonical artifacts."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    stage = error.stage.value
+    snapshot = directory / "diagnostics/provider-failures" / f"{timestamp}-{stage}"
+    report = {
+        "stage": stage,
+        "status": "revision_pre_review_invalid",
+        "phase": error.phase,
+        "attempted_provider_requests_this_run": 1,
+        "reviewer_requests_this_run": 0,
+        "historical_completed_provider_calls": checkpoint.provider_calls_completed,
+        "violations": list(error.violations),
+    }
+    try:
+        await write_bytes_atomic(
+            snapshot / "script-candidate.json",
+            json.dumps(error.candidate.model_dump(mode="json"), indent=2, sort_keys=True).encode(),
+        )
+        await write_bytes_atomic(
+            snapshot / "script-candidate.md",
+            FullEpisodeContentService._script_markdown(error.candidate),
+        )
+        await write_bytes_atomic(
+            snapshot / "validation.json",
+            json.dumps(report, indent=2, sort_keys=True).encode(),
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+    return snapshot
+
+
 def relative_diagnostic_path(path: Path, root: Path) -> Path:
     """Prefer a workspace-relative diagnostic location without exposing unrelated paths."""
     try:
@@ -710,6 +751,23 @@ def workflow_settings() -> ContentWorkflowSettings:
             VisualAssetType.TYPOGRAPHY,
         },
         storyboard_output_budget=STORYBOARD_MAX_OUTPUT_TOKENS,
+        short_revision_rules=(
+            None,
+            RevisionPreReviewRules(
+                exact_title="The 4 Checks Before You Trust a Compound-Growth Calculator",
+                require_empty_conclusion=True,
+                require_grammatical_final_disclaimer=True,
+                forbid_subscription_cta=True,
+                forbid_spoken_label_colons=True,
+                required_bindings=(
+                    RequiredRevisionBinding(
+                        section_id="check_time",
+                        claim_id="calculator_assumptions_shape_displayed_balance",
+                        reference=SHORT_2_CALCULATOR_REFERENCE,
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -881,6 +939,30 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
             print(f"  maximum: {pacing_issue.maximum_seconds}s")
             print(f"  visual_asset_type: {pacing_issue.visual_asset_type}")
             print(f"  message: {pacing_issue.message}")
+        if snapshot is not None:
+            print("Diagnostic snapshot:")
+            print(relative_diagnostic_path(snapshot, selected_root))
+        print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
+        return 4
+    except RevisionPreReviewError as error:
+        if options.resume is None:
+            print("Revised script failed pre-review checks safely.", file=sys.stderr)
+            return 4
+        directory = selected_root / options.resume
+        checkpoint = ContentCheckpointStore(directory).load()
+        snapshot = await persist_revision_pre_review_snapshot(
+            directory, checkpoint=checkpoint, error=error
+        )
+        print("FULL EPISODE CONTENT VALIDATION STOP")
+        print(f"Stage: {error.stage.value}")
+        print("Status: revision_pre_review_invalid")
+        print(f"Phase: {error.phase}")
+        print("Provider requests attempted this run: 1")
+        print("Reviewer requests attempted this run: 0")
+        print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
+        print(f"Violations: {len(error.violations)}")
+        for violation in error.violations:
+            print(f"- {violation}")
         if snapshot is not None:
             print("Diagnostic snapshot:")
             print(relative_diagnostic_path(snapshot, selected_root))

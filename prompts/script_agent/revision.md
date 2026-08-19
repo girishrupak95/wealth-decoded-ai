@@ -22,6 +22,8 @@ $rejected_script
 AUTHORITATIVE REVIEW CORRECTIONS
 $review_corrections
 
+$revision_acceptance_checklist
+
 $active_editorial_constraints
 
 $active_script_constraints

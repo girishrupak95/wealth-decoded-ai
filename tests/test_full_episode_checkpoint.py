@@ -3,6 +3,7 @@
 import importlib
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -25,6 +26,8 @@ from shared.content.workflow import (
     ResearchGenerator,
     ReviewGenerator,
     RevisedScriptLengthError,
+    RevisionPreReviewError,
+    RevisionPreReviewRules,
     ScriptGenerator,
     ScriptLengthPolicyIssue,
     StoryboardGenerator,
@@ -736,6 +739,83 @@ async def test_overlong_short_revision_stops_before_reviewer_and_preserves_check
     assert script_path.read_bytes() == script_before
     assert review_path.read_bytes() == review_before
     assert not (initial.directory / "shorts/short-01/revisions").exists()
+
+
+@pytest.mark.asyncio
+async def test_pre_review_gate_stops_before_reviewer_and_preserves_checkpoint(
+    tmp_path: Path,
+) -> None:
+    fixture = content()
+    rejected_short_review = review(fixture.shorts[0].script, approved=False)
+    fake_agents, calls = agents(
+        scripts=[fixture.script, fixture.shorts[0].script],
+        reviews=[fixture.review, rejected_short_review],
+        storyboards=[fixture.storyboard],
+    )
+    settings = replace(
+        cli.workflow_settings(),
+        short_revision_rules=(
+            RevisionPreReviewRules(exact_title="Required revised title"),
+            None,
+        ),
+    )
+    workflow = ContentWorkflow(fake_agents, settings, report=lambda _: None)
+    initial = await workflow.fresh(tmp_path)
+    checkpoint_before = (initial.directory / "checkpoint.json").read_bytes()
+    script_path = initial.directory / "shorts/short-01/script.json"
+    review_path = initial.directory / "shorts/short-01/review.json"
+    script_before = script_path.read_bytes()
+    review_before = review_path.read_bytes()
+    calls["revision"].side_effect = [fixture.shorts[0].script]
+    review_calls_before = calls["review"].await_count
+
+    with pytest.raises(RevisionPreReviewError) as caught:
+        await workflow.revise(initial.directory)
+
+    assert caught.value.violations == ("exact_title_mismatch",)
+    assert calls["revision"].await_count == 1
+    assert calls["review"].await_count == review_calls_before
+    assert (initial.directory / "checkpoint.json").read_bytes() == checkpoint_before
+    assert script_path.read_bytes() == script_before
+    assert review_path.read_bytes() == review_before
+    assert not (initial.directory / "shorts/short-01/revisions").exists()
+
+
+@pytest.mark.asyncio
+async def test_pre_review_failure_persists_all_violations_noncanonically(
+    tmp_path: Path,
+) -> None:
+    candidate = content().shorts[1].script
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.SHORT_02_REVIEW,
+        completed_stages=list(ContentRunStage)[:11],
+        provider_calls_completed=35,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.REVIEW_REJECTED,
+        rejection_stage=ContentRunStage.SHORT_02_REVIEW,
+        rejection_reason="Revise.",
+    )
+    error = RevisionPreReviewError(
+        ContentRunStage.SHORT_02_SCRIPT,
+        candidate,
+        ("standalone_conclusion_present", "missing_required_claim_binding:calculator_claim"),
+    )
+
+    snapshot = await cli.persist_revision_pre_review_snapshot(
+        tmp_path, checkpoint=checkpoint, error=error
+    )
+
+    assert snapshot is not None
+    assert (snapshot / "script-candidate.json").is_file()
+    assert (snapshot / "script-candidate.md").is_file()
+    validation = json.loads((snapshot / "validation.json").read_text())
+    assert validation["status"] == "revision_pre_review_invalid"
+    assert validation["attempted_provider_requests_this_run"] == 1
+    assert validation["reviewer_requests_this_run"] == 0
+    assert validation["historical_completed_provider_calls"] == 35
+    assert validation["violations"] == list(error.violations)
 
 
 @pytest.mark.asyncio

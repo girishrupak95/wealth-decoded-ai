@@ -294,6 +294,12 @@ def test_reviewer_uses_only_authoritative_short_length_policy() -> None:
     assert "generation target or safety target" in totals
     assert "100" not in guidance
     assert "100" not in totals
+    assert "report every material blocking or required change" in guidance
+    assert "do not intentionally defer known issues" in guidance
+    assert "Keep optional improvements separate" in guidance
+    assert "never reject solely to pursue an optional warning" in guidance
+    assert "required_changes is empty" in guidance
+    assert "perfection is not required" in guidance
 
 
 def test_claim_language_stays_within_current_source_support() -> None:

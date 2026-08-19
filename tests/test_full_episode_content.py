@@ -524,7 +524,7 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "Do not request or create a hook-level binding" in guidance
     assert "existing closest materially relevant ScriptSection, check_time" in guidance
     assert "without adding a new section" in guidance
-    assert "stable, descriptive claim_id" in guidance
+    assert "stable claim_id=calculator_assumptions_shape_displayed_balance" in guidance
     assert "section_id=check_time" in guidance
     assert "support_type=source" in guidance
     assert "verification_status=verified" in guidance

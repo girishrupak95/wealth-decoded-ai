@@ -7,7 +7,18 @@ import pytest
 from agents.reviewer_agent.service import ScriptReviewService
 from agents.script_agent.service import ScriptGenerationService
 
-from shared.content.workflow import ContentWorkflow, RevisedScriptLengthError
+from shared.content.workflow import (
+    ContentWorkflow,
+    RequiredRevisionBinding,
+    RevisedScriptLengthError,
+    RevisionPreReviewError,
+    RevisionPreReviewRules,
+)
+from shared.models.claim_verification import (
+    ClaimReferenceBinding,
+    ClaimSupportType,
+    ClaimVerificationStatus,
+)
 from shared.models.content_package import ContentRunStage
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import (
@@ -230,6 +241,78 @@ def test_revised_short_word_violation_reports_exact_totals(
     assert caught.value.issue.minimum_words == 70
     assert caught.value.issue.maximum_words == 108
     assert expected_violation in caught.value.issue.violations
+
+
+def test_revision_pre_review_gate_aggregates_mechanical_violations() -> None:
+    candidate = script().model_copy(
+        update={
+            "title": "Wrong title",
+            "hook": "Check time: word word word",
+            "conclusion": "Duplicate payoff.",
+            "cta": "Subscribe before checking the result.",
+            "disclaimer": "educational only",
+        }
+    )
+    rules = RevisionPreReviewRules(
+        exact_title="Required title",
+        require_empty_conclusion=True,
+        require_grammatical_final_disclaimer=True,
+        forbid_subscription_cta=True,
+        forbid_spoken_label_colons=True,
+        required_bindings=(RequiredRevisionBinding("check_time", "calculator_claim", "Exact"),),
+    )
+
+    with pytest.raises(RevisionPreReviewError) as caught:
+        ContentWorkflow._require_revision_contract(
+            candidate, ContentRunStage.SHORT_02_SCRIPT, rules
+        )
+
+    assert caught.value.violations == (
+        "exact_title_mismatch",
+        "standalone_conclusion_present",
+        "subscription_cta_present",
+        "disclaimer_not_grammatical",
+        "spoken_label_colon_present",
+        "missing_required_section:check_time",
+    )
+
+
+def test_revision_pre_review_gate_checks_exact_verified_binding() -> None:
+    reference = "Exact calculator reference"
+    binding = ClaimReferenceBinding(
+        claim_id="calculator_claim",
+        section_id="check_time",
+        claim_summary="Calculator assumptions shape its displayed result.",
+        reference="Wrong reference",
+        support_type=ClaimSupportType.SOURCE,
+        verification_status=ClaimVerificationStatus.REQUIRED,
+    )
+    section = (
+        script()
+        .sections[0]
+        .model_copy(
+            update={
+                "section_id": "check_time",
+                "claim_bindings": [binding],
+                "source_references": [],
+            }
+        )
+    )
+    candidate = script().model_copy(update={"sections": [section]})
+    rules = RevisionPreReviewRules(
+        required_bindings=(RequiredRevisionBinding("check_time", "calculator_claim", reference),)
+    )
+
+    with pytest.raises(RevisionPreReviewError) as caught:
+        ContentWorkflow._require_revision_contract(
+            candidate, ContentRunStage.SHORT_02_SCRIPT, rules
+        )
+
+    assert caught.value.violations == (
+        "incorrect_claim_reference:calculator_claim",
+        "claim_binding_not_verified:calculator_claim",
+        "missing_section_source_reference:calculator_claim",
+    )
 
 
 @pytest.mark.parametrize("word_count", [60, 108])

@@ -15,7 +15,7 @@ from shared.configuration import load_settings_section
 from shared.exceptions.ai import OutputValidationError
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import short_content_policy, short_production_fixture_policy
-from shared.models.script_review import ReviewScores, ScriptReview
+from shared.models.script_review import ReviewFinding, ReviewScores, ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import VideoScript
 
@@ -140,6 +140,7 @@ def make_agent(tmp_path: Path, response: str) -> tuple[ScriptAgent, MockLLMClien
         "ALLOWED_SOURCE_REFERENCES $allowed_source_references\n"
         "REJECTED SCRIPT $rejected_script\n"
         "AUTHORITATIVE REVIEW CORRECTIONS $review_corrections\n"
+        "$revision_acceptance_checklist\n"
         "$active_editorial_constraints\n$active_script_constraints",
         encoding="utf-8",
     )
@@ -191,10 +192,21 @@ def rejected_review() -> ScriptReview:
             compliance_score=8,
             overall_score=7,
         ),
-        findings=[],
+        findings=[
+            ReviewFinding(
+                finding_id="finding-flow",
+                category="clarity",
+                severity="warning",
+                section_id="action",
+                message="The checks feel disconnected.",
+                evidence="Transitions are missing.",
+                recommended_change="Connect every required check in one flow.",
+            )
+        ],
         revision_summary="Shorten and correct the unsupported claim.",
         required_changes=["Remove the unsupported household claim."],
         optional_improvements=["Optional decorative suggestion."],
+        blocking_findings=["The unsupported claim blocks approval."],
         reviewed_at=datetime(2026, 8, 16, tzinfo=UTC),
         reviewer_version="1.0",
     )
@@ -220,6 +232,12 @@ async def test_revision_uses_compact_context_and_script_specific_budget(tmp_path
     assert "REJECTED SCRIPT" in client.request.template
     assert "Remove the unsupported household claim." in client.request.template
     assert "Retain the disclaimer." in client.request.template
+    assert "REVISION ACCEPTANCE CHECKLIST" in client.request.template
+    assert "Resolve ALL supplied required changes in this one revision" in client.request.template
+    assert "Do not optimize one finding while leaving another unresolved" in client.request.template
+    assert "The unsupported claim blocks approval" in client.request.template
+    assert "The checks feel disconnected" in client.request.template
+    assert "Connect every required check in one flow" in client.request.template
     assert "Optional decorative suggestion." not in client.request.template
     assert "hook_score" not in client.request.template
     assert "created_at" not in client.request.template

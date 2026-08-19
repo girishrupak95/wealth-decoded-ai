@@ -58,6 +58,9 @@ def build_script_revision_request(
             "allowed_source_references": research.references,
             "rejected_script": _compact_script(previous_script),
             "review_corrections": _compact_review(review),
+            "revision_acceptance_checklist": _revision_acceptance_checklist(
+                review, policy, editorial_constraints
+            ),
             "active_editorial_constraints": _active_editorial_constraints(editorial_constraints),
             "active_script_constraints": _active_script_constraints(policy),
             "asset_packaging_guidance": _asset_packaging_guidance(policy),
@@ -104,6 +107,36 @@ def _compact_review(review: ScriptReview) -> dict[str, object]:
             if finding.severity in {"warning", "critical"}
         ],
     }
+
+
+def _revision_acceptance_checklist(
+    review: ScriptReview,
+    policy: ScriptLengthPolicy,
+    editorial_constraints: list[str],
+) -> str:
+    """Preserve every active correction in one provider self-audit checklist."""
+    items = [
+        f"Authoritative spoken words: {policy.min_words}-{policy.max_words}",
+        f"Authoritative duration: {policy.min_duration_seconds}-{policy.max_duration_seconds}s",
+        *[f"Required change: {change}" for change in review.required_changes],
+        *[f"Blocking finding: {finding}" for finding in review.blocking_findings],
+        *[
+            f"{finding.severity.title()} finding: {finding.message} Recommended change: "
+            f"{finding.recommended_change}"
+            for finding in review.findings
+            if finding.severity in {"warning", "critical"}
+        ],
+        *[f"Active contract: {constraint}" for constraint in editorial_constraints],
+    ]
+    return "\n".join(
+        [
+            "REVISION ACCEPTANCE CHECKLIST",
+            "Resolve ALL supplied required changes in this one revision.",
+            "Do not optimize one finding while leaving another unresolved.",
+            "Self-audit the complete checklist before returning the structured script.",
+            *[f"- {item}" for item in items],
+        ]
+    )
 
 
 def _without_base_metadata(value: object) -> object:
