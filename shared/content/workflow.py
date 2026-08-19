@@ -46,6 +46,36 @@ from shared.visual.processing import write_bytes_atomic
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
+@dataclass(frozen=True)
+class ScriptLengthPolicyIssue:
+    """Bounded authoritative totals for one rejected revised-script candidate."""
+
+    spoken_word_count: int
+    minimum_words: int
+    maximum_words: int
+    estimated_duration_seconds: int
+    minimum_duration_seconds: int
+    maximum_duration_seconds: int
+    violations: tuple[str, ...]
+
+
+class RevisedScriptLengthError(FullEpisodeContentError):
+    """A structurally valid revised script failed authoritative length policy."""
+
+    phase = "short_length_policy"
+
+    def __init__(
+        self,
+        stage: ContentRunStage,
+        candidate: VideoScript,
+        issue: ScriptLengthPolicyIssue,
+    ) -> None:
+        super().__init__("Revised script failed the authoritative length policy.")
+        self.stage = stage
+        self.candidate = candidate
+        self.issue = issue
+
+
 class TopicGenerator(Protocol):
     async def discover(self, category: str) -> list[TopicCandidate]: ...
 
@@ -225,7 +255,7 @@ class ContentWorkflow:
             policy,
             constraints,
         )
-        self._require_policy(revised, policy)
+        self._require_policy(revised, policy, script_stage)
         archive = directory / STAGE_FILES[script_stage].parent / "revisions"
         await write_bytes_atomic(archive / "rejected-script.json", canonical_bytes(previous))
         await write_bytes_atomic(archive / "rejected-review.json", canonical_bytes(rejected_review))
@@ -505,16 +535,36 @@ class ContentWorkflow:
         return "; ".join(review.required_changes) or review.revision_summary
 
     @staticmethod
-    def _require_policy(script: VideoScript, policy: ScriptLengthPolicy) -> None:
+    def _require_policy(
+        script: VideoScript, policy: ScriptLengthPolicy, stage: ContentRunStage
+    ) -> None:
         """Stop before persistence/review when a revision violates authoritative bounds."""
         totals = derived_script_totals(script, policy)
-        if not (
-            policy.min_words <= totals["spoken_word_count"] <= policy.max_words
-            and policy.min_duration_seconds
-            <= totals["duration_seconds"]
-            <= policy.max_duration_seconds
-        ):
-            raise ValueError("Revised script failed the authoritative length policy.")
+        word_count = totals["spoken_word_count"]
+        duration = totals["duration_seconds"]
+        violations: list[str] = []
+        if word_count < policy.min_words:
+            violations.append("spoken_word_count_below_minimum")
+        if word_count > policy.max_words:
+            violations.append("spoken_word_count_above_maximum")
+        if duration < policy.min_duration_seconds:
+            violations.append("duration_below_minimum")
+        if duration > policy.max_duration_seconds:
+            violations.append("duration_above_maximum")
+        if violations:
+            raise RevisedScriptLengthError(
+                stage,
+                script,
+                ScriptLengthPolicyIssue(
+                    spoken_word_count=word_count,
+                    minimum_words=policy.min_words,
+                    maximum_words=policy.max_words,
+                    estimated_duration_seconds=duration,
+                    minimum_duration_seconds=policy.min_duration_seconds,
+                    maximum_duration_seconds=policy.max_duration_seconds,
+                    violations=tuple(violations),
+                ),
+            )
 
     @staticmethod
     def _short_stages(

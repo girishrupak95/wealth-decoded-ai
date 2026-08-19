@@ -24,7 +24,9 @@ from shared.content.workflow import (
     ContentWorkflow,
     ResearchGenerator,
     ReviewGenerator,
+    RevisedScriptLengthError,
     ScriptGenerator,
+    ScriptLengthPolicyIssue,
     StoryboardGenerator,
     TopicGenerator,
 )
@@ -542,6 +544,124 @@ async def test_invalid_script_revision_retains_revision_stage(
 
     assert code == 4
     assert "Stage: long_form_script_revision" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_short_length_failure_persists_candidate_without_touching_canonical_artifacts(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    directory = tmp_path / "run"
+    canonical = directory / "shorts/short-01"
+    canonical.mkdir(parents=True)
+    checkpoint_path = directory / "checkpoint.json"
+    script_path = canonical / "script.json"
+    review_path = canonical / "review.json"
+    checkpoint_path.write_bytes(b"authoritative-checkpoint")
+    script_path.write_bytes(b"authoritative-script")
+    review_path.write_bytes(b"authoritative-review")
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.SHORT_01_REVIEW,
+        completed_stages=list(ContentRunStage)[:8],
+        provider_calls_completed=20,
+        provider_calls_this_run=0,
+        status=ContentRunStatus.REVIEW_REJECTED,
+        rejection_stage=ContentRunStage.SHORT_01_REVIEW,
+        rejection_reason="Revise length.",
+    )
+    candidate = content().shorts[0].script
+    failure = RevisedScriptLengthError(
+        ContentRunStage.SHORT_01_SCRIPT,
+        candidate,
+        ScriptLengthPolicyIssue(
+            spoken_word_count=114,
+            minimum_words=70,
+            maximum_words=108,
+            estimated_duration_seconds=47,
+            minimum_duration_seconds=25,
+            maximum_duration_seconds=45,
+            violations=("spoken_word_count_above_maximum", "duration_above_maximum"),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    monkeypatch.setattr(cli, "execute_workflow", AsyncMock(side_effect=failure))
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--revise-rejected-script", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 4
+    assert "Asset: short_01" in output
+    assert "Spoken word range: 70-108" in output
+    assert "Preferred target: 85-100 words" in output
+    assert "Duration range: 25-45 sec" in output
+    assert "approximately 690 words" not in output
+    assert "Stage: short_01_script" in output
+    assert "Status: content_policy_invalid" in output
+    assert "Phase: short_length_policy" in output
+    assert "Provider requests attempted this run: 1" in output
+    assert "Successful provider stage calls this run: 0" in output
+    assert "Historical completed provider calls: 20" in output
+    assert "114 (allowed 70-108)" in output
+    assert "47s (allowed 25-45s)" in output
+    assert "spoken_word_count_above_maximum" in output
+    assert "duration_above_maximum" in output
+    assert "Traceback" not in output
+
+    snapshots = list((directory / "diagnostics/provider-failures").iterdir())
+    assert len(snapshots) == 1
+    assert (snapshots[0] / "script-candidate.json").is_file()
+    assert (snapshots[0] / "script-candidate.md").is_file()
+    validation = json.loads((snapshots[0] / "validation.json").read_text())
+    assert validation["phase"] == "short_length_policy"
+    assert validation["spoken_word_count"] == 114
+    assert validation["estimated_duration_seconds"] == 47
+    assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
+    assert script_path.read_bytes() == b"authoritative-script"
+    assert review_path.read_bytes() == b"authoritative-review"
+
+
+@pytest.mark.asyncio
+async def test_overlong_short_revision_stops_before_reviewer_and_preserves_checkpoint(
+    tmp_path: Path,
+) -> None:
+    fixture = content()
+    rejected_short_review = review(fixture.shorts[0].script, approved=False)
+    fake_agents, calls = agents(
+        scripts=[fixture.script, fixture.shorts[0].script],
+        reviews=[fixture.review, rejected_short_review],
+        storyboards=[fixture.storyboard],
+    )
+    workflow = ContentWorkflow(fake_agents, cli.workflow_settings(), report=lambda _: None)
+    initial = await workflow.fresh(tmp_path)
+    checkpoint_before = (initial.directory / "checkpoint.json").read_bytes()
+    script_path = initial.directory / "shorts/short-01/script.json"
+    review_path = initial.directory / "shorts/short-01/review.json"
+    script_before = script_path.read_bytes()
+    review_before = review_path.read_bytes()
+    calls["revision"].side_effect = [script("Overlong Short", 120)]
+    review_calls_before = calls["review"].await_count
+
+    with pytest.raises(RevisedScriptLengthError) as caught:
+        await workflow.revise(initial.directory)
+
+    assert caught.value.stage == ContentRunStage.SHORT_01_SCRIPT
+    assert "spoken_word_count_above_maximum" in caught.value.issue.violations
+    assert calls["revision"].await_count == 1
+    assert calls["review"].await_count == review_calls_before
+    assert (initial.directory / "checkpoint.json").read_bytes() == checkpoint_before
+    assert script_path.read_bytes() == script_before
+    assert review_path.read_bytes() == review_before
+    assert not (initial.directory / "shorts/short-01/revisions").exists()
 
 
 @pytest.mark.asyncio

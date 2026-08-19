@@ -17,6 +17,7 @@ from shared.content.full_episode import (
     ShortContentInput,
     StoryboardPacingValidationError,
 )
+from shared.models.content_package import ContentRunStage
 from shared.models.research import ResearchPackage
 from shared.models.script_review import ReviewScores, ScriptReview
 from shared.models.storyboard import (
@@ -393,6 +394,56 @@ def test_short_one_revision_requires_conversational_single_payoff_flow() -> None
     assert "fees 'compound against you'" in guidance
     assert "The Hidden Cost of Investment Fees" not in guidance
     assert "scene_" not in guidance
+
+
+def test_short_revision_prompt_prioritizes_compression_and_nonspoken_metadata() -> None:
+    guidance = " ".join(cli.workflow_settings().short_constraints[0])
+
+    assert "COMPRESSION PRIORITY" in guidance
+    assert "target about 85-100 words rather than the ceiling" in guidance
+    assert "reserve room for the spoken disclaimer" in guidance
+    assert "15-25 words for hook plus optional intro" in guidance
+    assert "40-55 words across core explanatory sections" in guidance
+    assert "12-20 words for the combined final CTA/payoff" in guidance
+    assert "planning guides, not per-field validators" in guidance
+    assert "complete hook may use an empty intro" in guidance
+    assert "complete payoff may use an empty conclusion" in guidance
+    assert "compress or remove redundant existing narration instead of appending" in guidance
+    assert "Do not verbalize claim_bindings" in guidance
+    assert "source_references, visual_direction, on_screen_text, or metadata" in guidance
+    assert "do not consume spoken-word budget" in guidance
+
+
+@pytest.mark.parametrize(
+    ("stage", "asset"),
+    [
+        (ContentRunStage.SHORT_01_REVIEW, "short_01"),
+        (ContentRunStage.SHORT_02_REVIEW, "short_02"),
+    ],
+)
+def test_short_revision_preflight_is_stage_aware(
+    stage: ContentRunStage, asset: str, capsys: CaptureFixture[str]
+) -> None:
+    cli.print_script_revision_preflight(stage)
+
+    output = capsys.readouterr().out
+    assert f"Asset: {asset}" in output
+    assert "Spoken word range: 70-108" in output
+    assert "Preferred target: 85-100 words" in output
+    assert "Duration range: 25-45 sec" in output
+    assert "Structured output budget: 6000 tokens" in output
+    assert "Automatic provider retries: 0" in output
+    assert "approximately 690 words" not in output
+
+
+def test_long_revision_preflight_preserves_long_form_target(
+    capsys: CaptureFixture[str],
+) -> None:
+    cli.print_script_revision_preflight(ContentRunStage.LONG_REVIEW)
+
+    output = capsys.readouterr().out
+    assert "Asset: long_form" in output
+    assert "Narration target: approximately 690 words" in output
 
 
 def test_short_two_has_independent_standalone_title_contract() -> None:

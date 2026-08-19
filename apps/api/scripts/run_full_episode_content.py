@@ -34,6 +34,7 @@ from shared.content.full_episode import (
     LONG_TYPICAL_SCENE_MIN_SECONDS,
     STORYBOARD_SCENE_MAX_SECONDS,
     FullEpisodeContentError,
+    FullEpisodeContentService,
     StoryboardPacingValidationError,
 )
 from shared.content.workflow import (
@@ -41,6 +42,7 @@ from shared.content.workflow import (
     ContentWorkflow,
     ContentWorkflowResult,
     ContentWorkflowSettings,
+    RevisedScriptLengthError,
 )
 from shared.exceptions.ai import OpenAIOutputTokenLimitError, OutputValidationError
 from shared.models.content_package import (
@@ -199,6 +201,22 @@ SHORT_CONSTRAINTS = (
             "improve natural spoken flow, and remain within policy. Do not broadly rewrite content "
             "that already satisfies the review."
         ),
+        (
+            "COMPRESSION PRIORITY: keep the hard 70-108 spoken-word range, but target about "
+            "85-100 words rather than the ceiling and reserve room for the spoken disclaimer. "
+            "Plan roughly 15-25 words for hook plus optional intro, 40-55 words across core "
+            "explanatory sections, and 12-20 words for the combined final CTA/payoff; these are "
+            "planning guides, not per-field validators. A complete hook may use an empty intro, "
+            "and a CTA carrying the complete payoff may use an empty conclusion."
+        ),
+        (
+            "When required changes add detail, compress or remove redundant existing narration "
+            "instead of appending sentences. Do not retain a redundant intro after strengthening "
+            "the hook, repeated smaller-base explanations after clarifying recurring fees, or an "
+            "old conclusion after adding the combined CTA. Do not verbalize claim_bindings, "
+            "source_references, visual_direction, on_screen_text, or metadata; those structured "
+            "fields do not consume spoken-word budget."
+        ),
         "Use only the supplied research and cite its exact references.",
     ],
     [
@@ -245,11 +263,25 @@ def print_preflight() -> None:
     print("Image generation: disabled")
 
 
-def print_script_revision_preflight() -> None:
+def print_script_revision_preflight(rejection_stage: ContentRunStage | None) -> None:
     """Expose bounded revision request behavior without estimating provider billing."""
     print("SCRIPT PROVIDER PREFLIGHT")
     print("Mode: revision")
-    print("Narration target: approximately 690 words")
+    if rejection_stage in {
+        ContentRunStage.SHORT_01_REVIEW,
+        ContentRunStage.SHORT_02_REVIEW,
+    }:
+        asset = "short_01" if rejection_stage == ContentRunStage.SHORT_01_REVIEW else "short_02"
+        print(f"Asset: {asset}")
+        print(f"Spoken word range: {SHORT_POLICY.min_words}-{SHORT_POLICY.max_words}")
+        print("Preferred target: 85-100 words")
+        print(
+            f"Duration range: {SHORT_POLICY.min_duration_seconds}-"
+            f"{SHORT_POLICY.max_duration_seconds} sec"
+        )
+    else:
+        print("Asset: long_form")
+        print("Narration target: approximately 690 words")
     print(f"Structured output budget: {SCRIPT_MAX_OUTPUT_TOKENS} tokens")
     print("Automatic provider retries: 0")
 
@@ -419,6 +451,51 @@ async def persist_storyboard_pacing_snapshot(
     return snapshot
 
 
+async def persist_script_length_snapshot(
+    directory: Path,
+    *,
+    checkpoint: ContentRunCheckpoint,
+    error: RevisedScriptLengthError,
+) -> Path | None:
+    """Persist a length-invalid revised script outside canonical stage artifacts."""
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    stage = error.stage.value
+    snapshot = directory / "diagnostics/provider-failures" / f"{timestamp}-{stage}"
+    issue = error.issue
+    report = {
+        "stage": stage,
+        "status": "content_policy_invalid",
+        "phase": error.phase,
+        "candidate_asset": stage,
+        "attempted_provider_requests_this_run": 1,
+        "successful_provider_stage_calls_this_run": 0,
+        "historical_completed_provider_calls": checkpoint.provider_calls_completed,
+        "spoken_word_count": issue.spoken_word_count,
+        "minimum_words": issue.minimum_words,
+        "maximum_words": issue.maximum_words,
+        "estimated_duration_seconds": issue.estimated_duration_seconds,
+        "minimum_duration_seconds": issue.minimum_duration_seconds,
+        "maximum_duration_seconds": issue.maximum_duration_seconds,
+        "violations": list(issue.violations),
+    }
+    try:
+        await write_bytes_atomic(
+            snapshot / "script-candidate.json",
+            json.dumps(error.candidate.model_dump(mode="json"), indent=2, sort_keys=True).encode(),
+        )
+        await write_bytes_atomic(
+            snapshot / "script-candidate.md",
+            FullEpisodeContentService._script_markdown(error.candidate),
+        )
+        await write_bytes_atomic(
+            snapshot / "validation.json",
+            json.dumps(report, indent=2, sort_keys=True).encode(),
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+    return snapshot
+
+
 def relative_diagnostic_path(path: Path, root: Path) -> Path:
     """Prefer a workspace-relative diagnostic location without exposing unrelated paths."""
     try:
@@ -542,7 +619,11 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
     try:
         print_preflight()
         if options.revise_rejected_script:
-            print_script_revision_preflight()
+            rejection_stage = None
+            if options.resume is not None:
+                revision_checkpoint = ContentCheckpointStore(selected_root / options.resume).load()
+                rejection_stage = revision_checkpoint.rejection_stage
+            print_script_revision_preflight(rejection_stage)
         if options.dry_run or not options.execute_provider:
             if options.resume is not None:
                 directory = selected_root / options.resume
@@ -670,6 +751,43 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
             print(f"  maximum: {pacing_issue.maximum_seconds}s")
             print(f"  visual_asset_type: {pacing_issue.visual_asset_type}")
             print(f"  message: {pacing_issue.message}")
+        if snapshot is not None:
+            print("Diagnostic snapshot:")
+            print(relative_diagnostic_path(snapshot, selected_root))
+        print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
+        return 4
+    except RevisedScriptLengthError as error:
+        if options.resume is None:
+            print("Revised script failed content policy safely.", file=sys.stderr)
+            return 4
+        directory = selected_root / options.resume
+        checkpoint = ContentCheckpointStore(directory).load()
+        snapshot = await persist_script_length_snapshot(
+            directory, checkpoint=checkpoint, error=error
+        )
+        length_issue = error.issue
+        print("FULL EPISODE CONTENT VALIDATION STOP")
+        print(f"Stage: {error.stage.value}")
+        print("Status: content_policy_invalid")
+        print(f"Phase: {error.phase}")
+        print("Provider requests attempted this run: 1")
+        print("Successful provider stage calls this run: 0")
+        print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
+        print("Completed stage: no")
+        print("Spoken words:")
+        print(
+            f"{length_issue.spoken_word_count} "
+            f"(allowed {length_issue.minimum_words}-{length_issue.maximum_words})"
+        )
+        print("Estimated duration:")
+        print(
+            f"{length_issue.estimated_duration_seconds}s "
+            f"(allowed {length_issue.minimum_duration_seconds}-"
+            f"{length_issue.maximum_duration_seconds}s)"
+        )
+        print("Violations:")
+        for violation in length_issue.violations:
+            print(f"- {violation}")
         if snapshot is not None:
             print("Diagnostic snapshot:")
             print(relative_diagnostic_path(snapshot, selected_root))

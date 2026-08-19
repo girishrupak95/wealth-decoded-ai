@@ -7,6 +7,8 @@ import pytest
 from agents.reviewer_agent.service import ScriptReviewService
 from agents.script_agent.service import ScriptGenerationService
 
+from shared.content.workflow import ContentWorkflow, RevisedScriptLengthError
+from shared.models.content_package import ContentRunStage
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import (
     ScriptLengthPolicy,
@@ -182,6 +184,84 @@ def test_derived_short_disclaimer_is_spoken_counted_and_extracted_once() -> None
     assert totals["duration_seconds"] == 37
     assert policy.min_words <= totals["spoken_word_count"] <= policy.max_words
     assert policy.min_duration_seconds <= totals["duration_seconds"] <= policy.max_duration_seconds
+
+
+def script_with_spoken_words(word_count: int) -> VideoScript:
+    source = observed_short_fixture_script()
+    disclaimer_words = source.calculate_word_count() - source.calculate_word_count(
+        include_disclaimer=False
+    )
+    sections = [section.model_copy(update={"narration": ""}) for section in source.sections]
+    return source.model_copy(
+        update={
+            "hook": " ".join(f"word{index}" for index in range(word_count - disclaimer_words)),
+            "intro": "",
+            "sections": sections,
+            "conclusion": "",
+            "cta": "",
+        }
+    )
+
+
+@pytest.mark.parametrize("word_count", [70, 108])
+def test_revised_short_exact_word_boundaries_pass(word_count: int) -> None:
+    ContentWorkflow._require_policy(
+        script_with_spoken_words(word_count),
+        short_content_policy(),
+        ContentRunStage.SHORT_01_SCRIPT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("word_count", "expected_violation"),
+    [(69, "spoken_word_count_below_minimum"), (109, "spoken_word_count_above_maximum")],
+)
+def test_revised_short_word_violation_reports_exact_totals(
+    word_count: int, expected_violation: str
+) -> None:
+    with pytest.raises(RevisedScriptLengthError) as caught:
+        ContentWorkflow._require_policy(
+            script_with_spoken_words(word_count),
+            short_content_policy(),
+            ContentRunStage.SHORT_01_SCRIPT,
+        )
+
+    assert caught.value.issue.spoken_word_count == word_count
+    assert caught.value.issue.minimum_words == 70
+    assert caught.value.issue.maximum_words == 108
+    assert expected_violation in caught.value.issue.violations
+
+
+@pytest.mark.parametrize("word_count", [60, 108])
+def test_revised_script_exact_duration_boundaries_pass(word_count: int) -> None:
+    policy = ScriptLengthPolicy(
+        min_words=1,
+        max_words=200,
+        min_duration_seconds=25,
+        max_duration_seconds=45,
+    )
+    ContentWorkflow._require_policy(
+        script_with_spoken_words(word_count), policy, ContentRunStage.SHORT_01_SCRIPT
+    )
+
+
+@pytest.mark.parametrize(
+    ("word_count", "expected_duration", "expected_violation"),
+    [(59, 24, "duration_below_minimum"), (110, 46, "duration_above_maximum")],
+)
+def test_revised_script_duration_issue_reports_exact_bounds(
+    word_count: int, expected_duration: int, expected_violation: str
+) -> None:
+    policy = short_content_policy()
+    with pytest.raises(RevisedScriptLengthError) as caught:
+        ContentWorkflow._require_policy(
+            script_with_spoken_words(word_count), policy, ContentRunStage.SHORT_01_SCRIPT
+        )
+
+    assert caught.value.issue.estimated_duration_seconds == expected_duration
+    assert caught.value.issue.minimum_duration_seconds == 25
+    assert caught.value.issue.maximum_duration_seconds == 45
+    assert expected_violation in caught.value.issue.violations
 
 
 @pytest.mark.asyncio
