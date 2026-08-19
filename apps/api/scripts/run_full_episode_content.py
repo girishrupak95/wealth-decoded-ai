@@ -220,13 +220,54 @@ SHORT_CONSTRAINTS = (
         "Use only the supplied research and cite its exact references.",
     ],
     [
-        "Create a standalone Short from the strongest practical or behavioral sub-idea.",
+        (
+            "Keep the standalone title exactly: 'The 4 Checks Before You Trust a "
+            "Compound-Growth Calculator'. Focus on one practical idea: a calculator output is "
+            "only as useful as the assumptions entered into it."
+        ),
         (
             "Give this derived Short its own standalone title for its primary insight. Do not "
             "blindly copy the broader parent episode title, and keep its packaging distinct from "
             "the other derived Short."
         ),
-        "Use a different hook, insight, and payoff from the counterintuitive Short.",
+        (
+            "Open with immediate stakes: a compound-growth calculator may show a convincing "
+            "ending number, but that number reflects the assumptions supplied. Do not use "
+            "'Compounding calculators do not think for you.' and do not require exact wording."
+        ),
+        (
+            "Use a natural intro that promises four checks—time, contributions, costs or taxes, "
+            "and purchasing power. Do not use the fragment 'Inspect the inputs first.'"
+        ),
+        (
+            "Include exactly one concise scenario explicitly described as hypothetical or "
+            "illustrative: a calculator may show an impressive future balance while assuming "
+            "steady returns, regular deposits, and no meaningful costs. Explain that the result "
+            "is an illustration, not a promise. Do not add exact amounts, return rates, tax rates, "
+            "inflation figures, or guaranteed-growth language."
+        ),
+        (
+            "Cover four checks accurately: time gives compounding room but does not eliminate "
+            "investment risk; contributions must be separated from investment performance; fees "
+            "reduce account value while tax treatment varies by circumstances; purchasing power "
+            "requires asking whether the displayed result is nominal or inflation-adjusted."
+        ),
+        (
+            "Make the checks one conversational sequence rather than isolated spoken labels: move "
+            "from the calculator result, to what produced it, to what can distort interpretation, "
+            "to what the ending number actually means. Use concise connective transitions."
+        ),
+        (
+            "End with one specific action-led CTA to check the time horizon, contributions, costs, "
+            "and purchasing power before trusting the ending number. A subscription invitation is "
+            "optional and should be omitted when it weakens the practical payoff."
+        ),
+        (
+            "Prefer 90-100 authoritative spoken words while remaining inside the hard 70-108 word "
+            "and 25-45 second Short policy. Keep the educational disclaimer exactly once as the "
+            "final spoken field. Compress instead of appending when space is tight."
+        ),
+        "Use a different hook, insight, and payoff from the fee-drag Short.",
         "Use only the supplied research and cite its exact references.",
     ],
 )

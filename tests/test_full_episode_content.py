@@ -449,9 +449,32 @@ def test_long_revision_preflight_preserves_long_form_target(
 def test_short_two_has_independent_standalone_title_contract() -> None:
     guidance = " ".join(cli.workflow_settings().short_constraints[1])
 
+    assert "The 4 Checks Before You Trust a Compound-Growth Calculator" in guidance
+    assert "only as useful as the assumptions entered into it" in guidance
     assert "own standalone title" in guidance
     assert "Do not blindly copy the broader parent episode title" in guidance
     assert "distinct from the other derived Short" in guidance
+    assert "convincing ending number" in guidance
+    assert "reflects the assumptions supplied" in guidance
+    assert "Compounding calculators do not think for you" in guidance
+    assert "time, contributions, costs or taxes, and purchasing power" in guidance
+    assert "Inspect the inputs first" in guidance
+    assert "exactly one concise scenario" in guidance
+    assert "hypothetical or illustrative" in guidance
+    assert "an illustration, not a promise" in guidance
+    assert "Do not add exact amounts, return rates, tax rates" in guidance
+    assert "does not eliminate investment risk" in guidance
+    assert "separated from investment performance" in guidance
+    assert "tax treatment varies by circumstances" in guidance
+    assert "nominal or inflation-adjusted" in guidance
+    assert "one conversational sequence" in guidance
+    assert "what can distort interpretation" in guidance
+    assert "one specific action-led CTA" in guidance
+    assert "subscription invitation is optional" in guidance
+    assert "Prefer 90-100 authoritative spoken words" in guidance
+    assert "hard 70-108 word and 25-45 second Short policy" in guidance
+    assert "disclaimer exactly once as the final spoken field" in guidance
+    assert "Compress instead of appending" in guidance
 
 
 def test_short_storyboard_constraints_require_hypothetical_projection_label() -> None:
