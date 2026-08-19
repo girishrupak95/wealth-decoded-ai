@@ -420,14 +420,22 @@ def test_short_revision_prompt_has_hard_generation_buffer(short_index: int) -> N
 
     assert settings.short_policy.max_words == 108
     assert settings.short_policy.min_words == 70
-    assert "target 88-96 spoken words" in guidance
-    assert "100 spoken words as the generation safety maximum" in guidance
+    expected_target = "88-96" if short_index == 0 else "88-94"
+    assert f"target {expected_target} spoken words" in guidance
+    if short_index == 0:
+        assert "100 spoken words as the generation safety maximum" in guidance
+    else:
+        assert "prefer no more than 100 spoken words as the generation safety target" in guidance
     assert "self-audit the complete spoken sequence" in guidance
     assert "hook, intro, all section narration, conclusion, CTA, and disclaimer" in guidance
     assert "Compress until it is no more than 100 spoken words" in guidance
     assert "Do not rely on the authoritative 108-word ceiling as the generation target" in guidance
-    assert "replace or compress existing narration" in guidance
-    assert "Never append new explanation while retaining an equivalent payoff" in guidance
+    if short_index == 0:
+        assert "replace or compress existing narration" in guidance
+        assert "Never append new explanation while retaining an equivalent payoff" in guidance
+    else:
+        assert "replace or delete existing narration instead of expanding" in guidance
+        assert "replacement and deletion" in guidance
 
 
 @pytest.mark.parametrize("short_index", [0, 1])
@@ -450,22 +458,27 @@ def test_short_generation_buffer_is_not_sent_to_reviewer(short_index: int) -> No
 
 
 @pytest.mark.parametrize(
-    ("stage", "asset"),
+    ("stage", "asset", "target"),
     [
-        (ContentRunStage.SHORT_01_REVIEW, "short_01"),
-        (ContentRunStage.SHORT_02_REVIEW, "short_02"),
+        (ContentRunStage.SHORT_01_REVIEW, "short_01", "88-96"),
+        (ContentRunStage.SHORT_02_REVIEW, "short_02", "88-94"),
     ],
 )
 def test_short_revision_preflight_is_stage_aware(
-    stage: ContentRunStage, asset: str, capsys: CaptureFixture[str]
+    stage: ContentRunStage, asset: str, target: str, capsys: CaptureFixture[str]
 ) -> None:
     cli.print_script_revision_preflight(stage)
 
     output = capsys.readouterr().out
     assert f"Asset: {asset}" in output
     assert "Spoken word range: 70-108" in output
-    assert "Generation target: 88-96 words" in output
-    assert "Generation safety maximum: 100 words" in output
+    if stage == ContentRunStage.SHORT_02_REVIEW:
+        assert f"Generation target: {target} words" in output
+        assert "Generation safety target: prefer <=100 words" in output
+        assert "Generation target: 88-96 words" not in output
+    else:
+        assert f"Generation target: {target} words" in output
+        assert "Generation safety maximum: 100 words" in output
     assert "Duration range: 25-45 sec" in output
     assert "Structured output budget: 6000 tokens" in output
     assert "Automatic provider retries: 0" in output
@@ -513,10 +526,21 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "nominal future balance may look larger" in guidance
     assert "buying less than the number suggests after inflation" in guidance
     assert "one conversational sequence" in guidance
-    assert "what can distort interpretation" in guidance
-    assert "Every spoken field must be a complete, natural sentence" in guidance
-    assert "Then check costs:" in guidance
-    assert "Finally, ask nominal or inflation-adjusted:" in guidance
+    assert "four connected checks" in guidance
+    assert "Time should flow naturally from those assumptions" in guidance
+    assert (
+        "Contributions and performance must form one complete conversational sentence" in guidance
+    )
+    assert "returns can vary and can be negative" in guidance
+    assert "costs sentence must begin with a natural transition" in guidance
+    assert "Purchasing power must use a natural final transition" in guidance
+    assert "Every spoken field must be a complete natural sentence" in guidance
+    assert "For spoken narration only" in guidance
+    assert "outline-style label-plus-colon constructions" in guidance
+    assert "Separate contributions from performance:" in guidance
+    assert "Check costs:" in guidance
+    assert "does not apply to metadata, headings, structured fields" in guidance
+    assert "source references, or on-screen text" in guidance
     assert "one specific action-led CTA" in guidance
     assert "subscription invitation is prohibited" in guidance
     assert "hard 70-108 word and 25-45 second Short policy" in guidance

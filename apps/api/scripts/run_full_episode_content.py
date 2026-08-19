@@ -128,6 +128,15 @@ SHORT_GENERATION_BUFFER_GUIDANCE = (
     "target. When new required information is added, replace or compress existing narration. "
     "Never append new explanation while retaining an equivalent payoff elsewhere."
 )
+SHORT_2_GENERATION_BUFFER_GUIDANCE = (
+    f"{SCRIPT_GENERATION_ONLY_PREFIX} GENERATION BUFFER: the authoritative hard range remains "
+    "70-108 spoken words, but target 88-94 spoken words and prefer no more than 100 spoken "
+    "words as the generation safety target. Before returning the final structured script, "
+    "self-audit the complete spoken sequence—hook, intro, all section narration, conclusion, "
+    "CTA, and disclaimer. Compress until it is no more than 100 spoken words. Do not rely on the "
+    "authoritative 108-word ceiling as the generation target. When new required information is "
+    "added, replace or delete existing narration instead of expanding the script."
+)
 
 SHORT_CONSTRAINTS = (
     [
@@ -273,11 +282,20 @@ SHORT_CONSTRAINTS = (
         ),
         (
             "Make the checks one conversational sequence rather than isolated spoken labels: move "
-            "from the calculator result, to what produced it, to what can distort interpretation, "
-            "to what the ending number actually means. Every spoken field must be a complete, "
-            "natural sentence. Do not use telegraphic labels such as 'Check time:', "
-            "'Four checks:', 'Then check costs:', or 'Finally, ask nominal or "
-            "inflation-adjusted:'."
+            "from the hypothetical convincing calculator result, through the assumptions that "
+            "produced it, and then through the four connected checks. Time should flow naturally "
+            "from those assumptions and explain opportunity without certainty. Contributions and "
+            "performance must form one complete conversational sentence that also says returns "
+            "can vary and can be negative. The costs sentence must begin with a natural transition "
+            "from that idea before explaining fees and variable tax treatment. Purchasing power "
+            "must use a natural final transition into what the nominal balance can actually buy."
+        ),
+        (
+            "For spoken narration only, prohibit outline-style label-plus-colon constructions such "
+            "as 'Check time:', 'Separate contributions from performance:', 'Check costs:', and "
+            "'Four checks:'. Every spoken field must be a complete natural sentence using cause, "
+            "contrast, consequence, or transition where useful. This prohibition does not apply "
+            "to metadata, headings, structured fields, source references, or on-screen text."
         ),
         (
             "End with one specific action-led CTA to check the time horizon, contributions, costs, "
@@ -304,7 +322,7 @@ SHORT_CONSTRAINTS = (
             "and do not add a subscription CTA. Compress equivalent setup and payoff statements "
             "into one function without hardcoding candidate wording into the output."
         ),
-        SHORT_GENERATION_BUFFER_GUIDANCE,
+        SHORT_2_GENERATION_BUFFER_GUIDANCE,
         "Use a different hook, insight, and payoff from the fee-drag Short.",
         "Use only the supplied research and cite its exact references.",
     ],
@@ -353,8 +371,12 @@ def print_script_revision_preflight(rejection_stage: ContentRunStage | None) -> 
         asset = "short_01" if rejection_stage == ContentRunStage.SHORT_01_REVIEW else "short_02"
         print(f"Asset: {asset}")
         print(f"Spoken word range: {SHORT_POLICY.min_words}-{SHORT_POLICY.max_words}")
-        print("Generation target: 88-96 words")
-        print("Generation safety maximum: 100 words")
+        if rejection_stage == ContentRunStage.SHORT_02_REVIEW:
+            print("Generation target: 88-94 words")
+            print("Generation safety target: prefer <=100 words")
+        else:
+            print("Generation target: 88-96 words")
+            print("Generation safety maximum: 100 words")
         print(
             f"Duration range: {SHORT_POLICY.min_duration_seconds}-"
             f"{SHORT_POLICY.max_duration_seconds} sec"
