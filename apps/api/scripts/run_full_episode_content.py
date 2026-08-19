@@ -137,6 +137,13 @@ SHORT_2_GENERATION_BUFFER_GUIDANCE = (
     "authoritative 108-word ceiling as the generation target. When new required information is "
     "added, replace or delete existing narration instead of expanding the script."
 )
+SHORT_2_CALCULATOR_REFERENCE = (
+    'U.S. Securities and Exchange Commission, Investor.gov, "Compound Interest Calculator" '
+    "and compound-interest educational materials: "
+    "https://www.investor.gov/financial-tools-calculators/calculators/"
+    "compound-interest-calculator — supports the mathematical concept of compounding and "
+    "calculator assumptions."
+)
 
 SHORT_CONSTRAINTS = (
     [
@@ -254,8 +261,12 @@ SHORT_CONSTRAINTS = (
         (
             "Open with immediate stakes: a compound-growth calculator may show a convincing "
             "ending number, but trusting it too quickly is risky because that number reflects "
-            "the assumptions entered. Do not use 'Compounding calculators do not think for "
-            "you.' and do not require exact wording."
+            "the assumptions entered. Make the causal relationship explicit: the displayed "
+            "future or ending balance looks convincing because it reflects the entered steady "
+            "returns, regular deposits, and no-meaningful-cost assumptions, so trusting it without "
+            "inspecting those assumptions can mislead. Keep illustration-not-promise framing. Do "
+            "not use 'Compounding calculators do not think for you.' and do not require exact "
+            "wording."
         ),
         (
             "Use one complete conversational intro sentence that promises four checks: time, "
@@ -269,6 +280,21 @@ SHORT_CONSTRAINTS = (
             "meaningful costs. Explain that the result is an illustration, not a promise. Do not "
             "create a separate scenario later, imply a forecast, or add exact amounts, return "
             "rates, tax rates, inflation figures, or guaranteed-growth language."
+        ),
+        (
+            "TRACEABILITY FOR THE FACTUAL HOOK MECHANISM: hook is a plain string and cannot own "
+            "source_references or claim_bindings. Do not request or create a hook-level binding. "
+            "Use the existing closest materially relevant ScriptSection, check_time, without "
+            "adding a new section. Add or update one stable, descriptive claim_id whose "
+            "claim_summary materially represents that the calculator's displayed future balance "
+            "depends on entered return, recurring-contribution, time, and cost assumptions and is "
+            "illustrative rather than guaranteed. Set section_id=check_time, support_type=source, "
+            f"reference exactly to: {SHORT_2_CALCULATOR_REFERENCE} Set "
+            "verification_status=verified "
+            "and calculation_verification_id=null. Include the same exact reference in that "
+            "section's source_references. A generic, merely related, substituted, or FINRA source "
+            "does not satisfy this calculator-assumption claim. Do not repeat the hook assumptions "
+            "in narration solely to attach sourcing; structured metadata provides the traceability."
         ),
         (
             "Cover four checks accurately and concisely: more time gives compounding more "

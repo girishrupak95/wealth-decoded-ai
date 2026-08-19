@@ -506,6 +506,8 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "convincing ending number" in guidance
     assert "trusting it too quickly is risky" in guidance
     assert "reflects the assumptions entered" in guidance
+    assert "looks convincing because it reflects the entered" in guidance
+    assert "trusting it without inspecting those assumptions can mislead" in guidance
     assert "Compounding calculators do not think for you" in guidance
     assert "one complete conversational intro sentence" in guidance
     assert "time, contributions, costs, and purchasing power" in guidance
@@ -518,6 +520,21 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "Do not create a separate scenario later" in guidance
     assert "imply a forecast" in guidance
     assert "add exact amounts, return rates, tax rates" in guidance
+    assert "hook is a plain string and cannot own source_references or claim_bindings" in guidance
+    assert "Do not request or create a hook-level binding" in guidance
+    assert "existing closest materially relevant ScriptSection, check_time" in guidance
+    assert "without adding a new section" in guidance
+    assert "stable, descriptive claim_id" in guidance
+    assert "section_id=check_time" in guidance
+    assert "support_type=source" in guidance
+    assert "verification_status=verified" in guidance
+    assert "calculation_verification_id=null" in guidance
+    assert cli.SHORT_2_CALCULATOR_REFERENCE in guidance
+    assert "same exact reference in that section's source_references" in guidance
+    assert "generic, merely related, substituted, or FINRA source" in guidance
+    assert "does not satisfy this calculator-assumption claim" in guidance
+    assert "Do not repeat the hook assumptions in narration solely to attach sourcing" in guidance
+    assert "structured metadata provides the traceability" in guidance
     assert "does not eliminate investment uncertainty" in guidance
     assert "investment returns can vary and can be negative" in guidance
     assert "exact supporting FINRA reference" in guidance
