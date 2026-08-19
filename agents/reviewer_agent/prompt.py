@@ -84,6 +84,17 @@ def _active_editorial_constraints(editorial_constraints: list[str] | None) -> st
 
 def _review_format_guidance(policy: ScriptLengthPolicy) -> str:
     return (
+        "REQUIRED REVIEW OUTPUT: always include script_title exactly equal to the reviewed "
+        "VideoScript.title, plus approved, scores, findings, revision_summary, required_changes, "
+        "optional_improvements, blocking_findings, editorial_suggestions, "
+        "deterministic_gate_applied, reviewed_at, and reviewer_version. Never omit script_title, "
+        "even for a rejected review. "
+        "TRACEABILITY SHAPE: source_references and claim_bindings exist only on ScriptSection. "
+        "Hook, intro, conclusion, CTA, and disclaimer cannot own them. Do not require impossible "
+        "hook-level fields or duplicate a hook in narration solely to source it. A factual hook "
+        "may use an equivalent closest-section claim_summary with an exact supplied Research "
+        "reference and valid verification status; topically related but materially different "
+        "claims do not satisfy traceability. "
         f"ACTIVE SCRIPT LENGTH POLICY ({policy.profile_name}): judge this script within "
         f"{policy.min_words}-{policy.max_words} spoken words and "
         f"{policy.min_duration_seconds}-{policy.max_duration_seconds} seconds. Never require it "

@@ -10,6 +10,7 @@ from shared.ai.output_validator import OutputValidator
 from shared.ai.prompt_loader import PromptLoader
 from shared.models.research import ResearchPackage
 from shared.models.script_policy import short_production_fixture_policy
+from shared.models.script_review import ScriptReview
 from shared.models.video_concept import VideoConcept
 from shared.models.video_script import ScriptSection, VideoScript
 
@@ -160,3 +161,47 @@ async def test_reviewer_agent_validates_llm_response(tmp_path: Path) -> None:
     assert "spoken_word_count: 80" in client.request.template
     assert "duration_seconds: 33" in client.request.template
     assert "Do not recalculate or independently estimate these values" in client.request.template
+    assert "always include script_title exactly equal" in client.request.template
+    assert "Never omit script_title" in client.request.template
+    assert (
+        "source_references and claim_bindings exist only on ScriptSection"
+        in client.request.template
+    )
+    assert "Do not require impossible hook-level fields" in client.request.template
+    assert "equivalent closest-section claim_summary" in client.request.template
+    assert "topically related but materially different claims" in client.request.template
+
+
+def test_script_review_schema_requires_complete_provider_fields() -> None:
+    required = set(ScriptReview.model_json_schema()["required"])
+
+    assert required == {
+        "script_title",
+        "approved",
+        "scores",
+        "findings",
+        "revision_summary",
+        "required_changes",
+        "optional_improvements",
+        "reviewed_at",
+        "reviewer_version",
+    }
+    assert {
+        "blocking_findings",
+        "editorial_suggestions",
+        "deterministic_gate_applied",
+    }.isdisjoint(required)
+
+
+def test_traceability_structures_exist_only_on_script_sections() -> None:
+    assert "source_references" in ScriptSection.model_fields
+    assert "claim_bindings" in ScriptSection.model_fields
+    for top_level_spoken_field in (
+        "hook",
+        "intro",
+        "conclusion",
+        "cta",
+        "disclaimer",
+    ):
+        annotation = VideoScript.model_fields[top_level_spoken_field].annotation
+        assert annotation is str

@@ -547,6 +547,79 @@ async def test_invalid_script_revision_retains_revision_stage(
 
 
 @pytest.mark.asyncio
+async def test_malformed_review_after_persisted_short_revision_reports_review_stage(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    directory = tmp_path / "run"
+    directory.mkdir()
+    checkpoint_path = directory / "checkpoint.json"
+    checkpoint_path.write_bytes(b"authoritative-checkpoint")
+    checkpoint = ContentRunCheckpoint(
+        run_id="run",
+        topic_slug="topic",
+        current_stage=ContentRunStage.SHORT_01_SCRIPT,
+        completed_stages=list(ContentRunStage)[:7],
+        provider_calls_completed=21,
+        provider_calls_this_run=1,
+        status=ContentRunStatus.IN_PROGRESS,
+    )
+    invalid_review = {
+        "approved": False,
+        "required_changes": ["Fix traceability."],
+        "findings": [],
+    }
+    failure = OutputValidationError(
+        "invalid review",
+        error_count=1,
+        validation_issues=(
+            OutputValidationIssue(
+                field_path="script_title",
+                error_type="missing",
+                message="Field required",
+                location=("script_title",),
+            ),
+        ),
+        invalid_output=invalid_review,
+    )
+    monkeypatch.setattr(
+        cli,
+        "ContentCheckpointStore",
+        lambda _: SimpleNamespace(load=lambda: checkpoint),
+    )
+    monkeypatch.setattr(cli, "execute_workflow", AsyncMock(side_effect=failure))
+
+    code = await cli.async_main(
+        cli.parse_arguments(["--resume", "run", "--revise-rejected-script", "--execute-provider"]),
+        root=tmp_path,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 4
+    assert "Stage: short_01_review" in output
+    assert "Stage: script_revision" not in output
+    assert "Phase: provider_schema_validation" in output
+    assert "Candidate type: review" in output
+    assert "Provider requests attempted this run: 2" in output
+    assert "Successful provider stage calls this run: 1" in output
+    assert "Historical completed provider calls: 21" in output
+    assert "- script_title" in output
+    assert "message: Field required" in output
+    assert checkpoint_path.read_bytes() == b"authoritative-checkpoint"
+
+    snapshots = list((directory / "diagnostics/provider-failures").iterdir())
+    assert len(snapshots) == 1
+    validation = json.loads((snapshots[0] / "validation.json").read_text())
+    assert validation["stage"] == "short_01_review"
+    assert validation["phase"] == "provider_schema_validation"
+    assert validation["candidate_type"] == "review"
+    assert validation["attempted_provider_requests_this_run"] == 2
+    assert validation["successful_provider_stage_calls_this_run"] == 1
+    assert validation["issues"][0]["field_path"] == "script_title"
+
+
+@pytest.mark.asyncio
 async def test_short_length_failure_persists_candidate_without_touching_canonical_artifacts(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
@@ -662,6 +735,47 @@ async def test_overlong_short_revision_stops_before_reviewer_and_preserves_check
     assert script_path.read_bytes() == script_before
     assert review_path.read_bytes() == review_before
     assert not (initial.directory / "shorts/short-01/revisions").exists()
+
+
+@pytest.mark.asyncio
+async def test_resume_after_persisted_short_revision_starts_at_missing_review(
+    tmp_path: Path,
+) -> None:
+    fixture = content()
+    rejected_short_review = review(fixture.shorts[0].script, approved=False)
+    revised_short = fixture.shorts[0].script.model_copy(
+        update={"title": "A Revised Standalone Short"}
+    )
+    fake_agents, calls = agents(
+        scripts=[fixture.script, fixture.shorts[0].script],
+        reviews=[fixture.review, rejected_short_review],
+        storyboards=[fixture.storyboard],
+        revisions=[revised_short],
+    )
+    workflow = ContentWorkflow(fake_agents, cli.workflow_settings(), report=lambda _: None)
+    initial = await workflow.fresh(tmp_path)
+    calls["review"].side_effect = OutputValidationError("malformed review")
+
+    with pytest.raises(OutputValidationError):
+        await workflow.revise(initial.directory)
+
+    intermediate = ContentCheckpointStore(initial.directory).load()
+    assert intermediate.current_stage == ContentRunStage.SHORT_01_SCRIPT
+    assert intermediate.short_01_review_checksum is None
+    script_calls_before = calls["script"].await_count
+    revision_calls_before = calls["revision"].await_count
+    storyboard_calls_before = calls["storyboard"].await_count
+    review_calls_before = calls["review"].await_count
+    calls["review"].side_effect = [review(revised_short, approved=False)]
+
+    resumed = await workflow.resume(initial.directory)
+
+    assert resumed.rejected
+    assert resumed.checkpoint.rejection_stage == ContentRunStage.SHORT_01_REVIEW
+    assert calls["script"].await_count == script_calls_before
+    assert calls["revision"].await_count == revision_calls_before
+    assert calls["review"].await_count == review_calls_before + 1
+    assert calls["storyboard"].await_count == storyboard_calls_before
 
 
 @pytest.mark.asyncio

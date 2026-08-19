@@ -307,7 +307,7 @@ def next_provider_stage(checkpoint: ContentRunCheckpoint) -> ContentRunStage | N
 
 def provider_stop_stage(options: argparse.Namespace, checkpoint: ContentRunCheckpoint) -> str:
     """Identify the failed request from the unchanged checkpoint and explicit CLI mode."""
-    if options.revise_rejected_script:
+    if options.revise_rejected_script and checkpoint.status == ContentRunStatus.REVIEW_REJECTED:
         rejection_stage = checkpoint.rejection_stage
         if rejection_stage is None:
             return "script_revision"
@@ -331,8 +331,10 @@ async def persist_validation_snapshot(
     report = {
         "stage": stage,
         "status": "provider_output_invalid",
-        "attempted_provider_requests_this_run": 1,
-        "successful_provider_stage_calls_this_run": 0,
+        "phase": "provider_schema_validation",
+        "candidate_type": "review" if stage.endswith("_review") else "provider_output",
+        "attempted_provider_requests_this_run": checkpoint.provider_calls_this_run + 1,
+        "successful_provider_stage_calls_this_run": checkpoint.provider_calls_this_run,
         "historical_completed_provider_calls": checkpoint.provider_calls_completed,
         "issues": [
             {
@@ -808,8 +810,10 @@ async def async_main(options: argparse.Namespace, *, root: Path | None = None) -
         print("FULL EPISODE CONTENT VALIDATION STOP")
         print(f"Stage: {stage}")
         print("Status: provider_output_invalid")
-        print("Provider requests attempted this run: 1")
-        print("Successful provider stage calls this run: 0")
+        print("Phase: provider_schema_validation")
+        print(f"Candidate type: {'review' if stage.endswith('_review') else 'provider_output'}")
+        print("Provider requests attempted this run: " f"{checkpoint.provider_calls_this_run + 1}")
+        print("Successful provider stage calls this run: " f"{checkpoint.provider_calls_this_run}")
         print(f"Historical completed provider calls: {checkpoint.provider_calls_completed}")
         print("Completed stage: no")
         print(f"Checkpoint unchanged: {directory / 'checkpoint.json'}")
