@@ -117,6 +117,16 @@ LONG_EDITORIAL_CONSTRAINTS = [
     ),
     "Keep the opening-question payoff, disclaimer, restrained CTA, and reduce repetition.",
 ]
+SHORT_GENERATION_BUFFER_GUIDANCE = (
+    "GENERATION BUFFER: the authoritative hard range remains 70-108 spoken words, but target "
+    "88-96 spoken words and treat 100 spoken words as the generation safety maximum. Before "
+    "returning the final structured script, self-audit the complete spoken sequence—hook, intro, "
+    "all section narration, conclusion, CTA, and disclaimer. Compress until it is no more than "
+    "100 spoken words. Do not rely on the authoritative 108-word ceiling as the generation "
+    "target. When new required information is added, replace or compress existing narration. "
+    "Never append new explanation while retaining an equivalent payoff elsewhere."
+)
+
 SHORT_CONSTRAINTS = (
     [
         (
@@ -202,8 +212,7 @@ SHORT_CONSTRAINTS = (
             "that already satisfies the review."
         ),
         (
-            "COMPRESSION PRIORITY: keep the hard 70-108 spoken-word range, but target about "
-            "85-100 words rather than the ceiling and reserve room for the spoken disclaimer. "
+            "COMPRESSION PRIORITY: reserve room for the spoken disclaimer. "
             "Plan roughly 15-25 words for hook plus optional intro, 40-55 words across core "
             "explanatory sections, and 12-20 words for the combined final CTA/payoff; these are "
             "planning guides, not per-field validators. A complete hook may use an empty intro, "
@@ -217,6 +226,7 @@ SHORT_CONSTRAINTS = (
             "source_references, visual_direction, on_screen_text, or metadata; those structured "
             "fields do not consume spoken-word budget."
         ),
+        SHORT_GENERATION_BUFFER_GUIDANCE,
         "Use only the supplied research and cite its exact references.",
     ],
     [
@@ -232,30 +242,40 @@ SHORT_CONSTRAINTS = (
         ),
         (
             "Open with immediate stakes: a compound-growth calculator may show a convincing "
-            "ending number, but that number reflects the assumptions supplied. Do not use "
-            "'Compounding calculators do not think for you.' and do not require exact wording."
+            "ending number, but trusting it too quickly is risky because that number reflects "
+            "the assumptions entered. Do not use 'Compounding calculators do not think for "
+            "you.' and do not require exact wording."
         ),
         (
-            "Use a natural intro that promises four checks—time, contributions, costs or taxes, "
-            "and purchasing power. Do not use the fragment 'Inspect the inputs first.'"
+            "Use one complete conversational intro sentence that promises four checks: time, "
+            "contributions, costs, and purchasing power. Do not use 'Four checks:' or the "
+            "fragment 'Inspect the inputs first.'"
         ),
         (
             "Include exactly one concise scenario explicitly described as hypothetical or "
             "illustrative: a calculator may show an impressive future balance while assuming "
             "steady returns, regular deposits, and no meaningful costs. Explain that the result "
-            "is an illustration, not a promise. Do not add exact amounts, return rates, tax rates, "
-            "inflation figures, or guaranteed-growth language."
+            "is an illustration, not a promise. Use the scenario only to establish why assumptions "
+            "matter; do not make it carry all four checks. Do not add exact amounts, return rates, "
+            "tax rates, inflation figures, or guaranteed-growth language."
         ),
         (
-            "Cover four checks accurately: time gives compounding room but does not eliminate "
-            "investment risk; contributions must be separated from investment performance; fees "
-            "reduce account value while tax treatment varies by circumstances; purchasing power "
-            "requires asking whether the displayed result is nominal or inflation-adjusted."
+            "Cover four checks accurately and concisely: more time gives compounding more "
+            "opportunity but does not eliminate investment uncertainty; explicitly state that "
+            "investment returns can vary and can be negative, with the exact supporting FINRA "
+            "reference, while separating deposits or contributions from investment performance; "
+            "fees reduce account value while tax treatment varies by circumstances; and explain "
+            "the practical purchasing-power meaning that a nominal future balance may look larger "
+            "while buying less than the number suggests after inflation, without adding a rate or "
+            "exact number."
         ),
         (
             "Make the checks one conversational sequence rather than isolated spoken labels: move "
             "from the calculator result, to what produced it, to what can distort interpretation, "
-            "to what the ending number actually means. Use concise connective transitions."
+            "to what the ending number actually means. Every spoken field must be a complete, "
+            "natural sentence. Do not use telegraphic labels such as 'Check time:', "
+            "'Four checks:', 'Then check costs:', or 'Finally, ask nominal or "
+            "inflation-adjusted:'."
         ),
         (
             "End with one specific action-led CTA to check the time horizon, contributions, costs, "
@@ -263,10 +283,19 @@ SHORT_CONSTRAINTS = (
             "optional and should be omitted when it weakens the practical payoff."
         ),
         (
-            "Prefer 90-100 authoritative spoken words while remaining inside the hard 70-108 word "
-            "and 25-45 second Short policy. Keep the educational disclaimer exactly once as the "
-            "final spoken field. Compress instead of appending when space is tight."
+            "Remain inside the hard 70-108 word and 25-45 second Short policy. Keep the "
+            "educational disclaimer exactly once as the final spoken field. Improve wording by "
+            "replacing weak lines and compressing existing content; do not append extra "
+            "explanations on top of the current script."
         ),
+        (
+            "SHORT 2 COMPRESSION PRIORITY: remove redundant payoff sentences before the CTA; do "
+            "not explain the ending number twice; keep the single hypothetical scenario concise; "
+            "give each of the four checks one spoken function; do not verbalize sourcing metadata; "
+            "and do not add a subscription CTA. Compress equivalent setup and payoff statements "
+            "into one function without hardcoding candidate wording into the output."
+        ),
+        SHORT_GENERATION_BUFFER_GUIDANCE,
         "Use a different hook, insight, and payoff from the fee-drag Short.",
         "Use only the supplied research and cite its exact references.",
     ],
@@ -315,7 +344,8 @@ def print_script_revision_preflight(rejection_stage: ContentRunStage | None) -> 
         asset = "short_01" if rejection_stage == ContentRunStage.SHORT_01_REVIEW else "short_02"
         print(f"Asset: {asset}")
         print(f"Spoken word range: {SHORT_POLICY.min_words}-{SHORT_POLICY.max_words}")
-        print("Preferred target: 85-100 words")
+        print("Generation target: 88-96 words")
+        print("Generation safety maximum: 100 words")
         print(
             f"Duration range: {SHORT_POLICY.min_duration_seconds}-"
             f"{SHORT_POLICY.max_duration_seconds} sec"

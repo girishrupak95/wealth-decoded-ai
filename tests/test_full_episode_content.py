@@ -400,7 +400,6 @@ def test_short_revision_prompt_prioritizes_compression_and_nonspoken_metadata() 
     guidance = " ".join(cli.workflow_settings().short_constraints[0])
 
     assert "COMPRESSION PRIORITY" in guidance
-    assert "target about 85-100 words rather than the ceiling" in guidance
     assert "reserve room for the spoken disclaimer" in guidance
     assert "15-25 words for hook plus optional intro" in guidance
     assert "40-55 words across core explanatory sections" in guidance
@@ -412,6 +411,23 @@ def test_short_revision_prompt_prioritizes_compression_and_nonspoken_metadata() 
     assert "Do not verbalize claim_bindings" in guidance
     assert "source_references, visual_direction, on_screen_text, or metadata" in guidance
     assert "do not consume spoken-word budget" in guidance
+
+
+@pytest.mark.parametrize("short_index", [0, 1])
+def test_short_revision_prompt_has_hard_generation_buffer(short_index: int) -> None:
+    settings = cli.workflow_settings()
+    guidance = " ".join(settings.short_constraints[short_index])
+
+    assert settings.short_policy.max_words == 108
+    assert settings.short_policy.min_words == 70
+    assert "target 88-96 spoken words" in guidance
+    assert "100 spoken words as the generation safety maximum" in guidance
+    assert "self-audit the complete spoken sequence" in guidance
+    assert "hook, intro, all section narration, conclusion, CTA, and disclaimer" in guidance
+    assert "Compress until it is no more than 100 spoken words" in guidance
+    assert "Do not rely on the authoritative 108-word ceiling as the generation target" in guidance
+    assert "replace or compress existing narration" in guidance
+    assert "Never append new explanation while retaining an equivalent payoff" in guidance
 
 
 @pytest.mark.parametrize(
@@ -429,7 +445,8 @@ def test_short_revision_preflight_is_stage_aware(
     output = capsys.readouterr().out
     assert f"Asset: {asset}" in output
     assert "Spoken word range: 70-108" in output
-    assert "Preferred target: 85-100 words" in output
+    assert "Generation target: 88-96 words" in output
+    assert "Generation safety maximum: 100 words" in output
     assert "Duration range: 25-45 sec" in output
     assert "Structured output budget: 6000 tokens" in output
     assert "Automatic provider retries: 0" in output
@@ -455,26 +472,42 @@ def test_short_two_has_independent_standalone_title_contract() -> None:
     assert "Do not blindly copy the broader parent episode title" in guidance
     assert "distinct from the other derived Short" in guidance
     assert "convincing ending number" in guidance
-    assert "reflects the assumptions supplied" in guidance
+    assert "trusting it too quickly is risky" in guidance
+    assert "reflects the assumptions entered" in guidance
     assert "Compounding calculators do not think for you" in guidance
-    assert "time, contributions, costs or taxes, and purchasing power" in guidance
+    assert "one complete conversational intro sentence" in guidance
+    assert "time, contributions, costs, and purchasing power" in guidance
     assert "Inspect the inputs first" in guidance
     assert "exactly one concise scenario" in guidance
     assert "hypothetical or illustrative" in guidance
     assert "an illustration, not a promise" in guidance
+    assert "do not make it carry all four checks" in guidance
     assert "Do not add exact amounts, return rates, tax rates" in guidance
-    assert "does not eliminate investment risk" in guidance
-    assert "separated from investment performance" in guidance
+    assert "does not eliminate investment uncertainty" in guidance
+    assert "investment returns can vary and can be negative" in guidance
+    assert "exact supporting FINRA reference" in guidance
+    assert "separating deposits or contributions from investment performance" in guidance
     assert "tax treatment varies by circumstances" in guidance
-    assert "nominal or inflation-adjusted" in guidance
+    assert "nominal future balance may look larger" in guidance
+    assert "buying less than the number suggests after inflation" in guidance
     assert "one conversational sequence" in guidance
     assert "what can distort interpretation" in guidance
+    assert "Every spoken field must be a complete, natural sentence" in guidance
+    assert "Then check costs:" in guidance
+    assert "Finally, ask nominal or inflation-adjusted:" in guidance
     assert "one specific action-led CTA" in guidance
     assert "subscription invitation is optional" in guidance
-    assert "Prefer 90-100 authoritative spoken words" in guidance
     assert "hard 70-108 word and 25-45 second Short policy" in guidance
     assert "disclaimer exactly once as the final spoken field" in guidance
-    assert "Compress instead of appending" in guidance
+    assert "replacing weak lines and compressing existing content" in guidance
+    assert "do not append extra explanations" in guidance
+    assert "remove redundant payoff sentences before the CTA" in guidance
+    assert "do not explain the ending number twice" in guidance
+    assert "keep the single hypothetical scenario concise" in guidance
+    assert "each of the four checks one spoken function" in guidance
+    assert "do not verbalize sourcing metadata" in guidance
+    assert "do not add a subscription CTA" in guidance
+    assert "Compress equivalent setup and payoff statements into one function" in guidance
 
 
 def test_short_storyboard_constraints_require_hypothetical_projection_label() -> None:

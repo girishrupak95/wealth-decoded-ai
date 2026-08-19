@@ -675,7 +675,8 @@ async def test_short_length_failure_persists_candidate_without_touching_canonica
     assert code == 4
     assert "Asset: short_01" in output
     assert "Spoken word range: 70-108" in output
-    assert "Preferred target: 85-100 words" in output
+    assert "Generation target: 88-96 words" in output
+    assert "Generation safety maximum: 100 words" in output
     assert "Duration range: 25-45 sec" in output
     assert "approximately 690 words" not in output
     assert "Stage: short_01_script" in output
