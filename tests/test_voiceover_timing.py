@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import shutil
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +15,7 @@ import pytest
 from shared.constants import DEFAULT_SCRIPT_WORDS_PER_MINUTE
 from shared.voiceover.timing import (
     FFmpegTempoPreviewRenderer,
+    VoiceoverTimingError,
     audit_voiceover_timing,
     classify_tempo,
     generate_tempo_previews,
@@ -134,14 +138,41 @@ def test_default_audit_writes_no_transformed_audio(tmp_path: Path) -> None:
     assert (Path(report["output_root"]) / "timing-audit.md").is_file()
 
 
+def test_normal_cli_returns_resolution_required_exit_code(tmp_path: Path, capsys: Any) -> None:
+    cli = _load_cli()
+    options = cli.parse_arguments(
+        [
+            "--content-root",
+            str(CONTENT_ROOT),
+            "--voice-root",
+            str(VOICE_ROOT),
+            "--output-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert asyncio.run(cli.async_main(options)) == 2
+    assert "Aggregate status: resolution_required" in capsys.readouterr().out
+    assert not (tmp_path / RUN_ID / "previews").exists()
+
+
 class FakeRenderer:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, Path, float]] = []
 
-    async def render(self, source: Path, output: Path, factor: float) -> None:
+    async def render(self, source: Path, output: Path, factor: float) -> dict[str, Any]:
         self.calls.append((source, output, factor))
         await asyncio.to_thread(output.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(output.write_bytes, b"preview")
+        return {
+            "preview_path": output.as_posix(),
+            "source_audio_checksum": hashlib.sha256(
+                await asyncio.to_thread(source.read_bytes)
+            ).hexdigest(),
+            "tempo_factor": factor,
+            "preview_checksum": hashlib.sha256(b"preview").hexdigest(),
+            "preview_duration_seconds": 300.0 if "long-form" in output.parts else 45.0,
+        }
 
 
 def test_explicit_preview_defaults_to_minor_and_preserves_raw_audio(tmp_path: Path) -> None:
@@ -153,9 +184,9 @@ def test_explicit_preview_defaults_to_minor_and_preserves_raw_audio(tmp_path: Pa
 
     assert len(previews) == 1
     assert len(renderer.calls) == 1
-    assert "long-form" in previews[0]
+    assert "long-form" in previews[0]["preview_path"]
     assert _tree(VOICE_ROOT) == before
-    assert all("short-02" not in path for path in previews)
+    assert all("short-02" not in item["preview_path"] for item in previews)
 
 
 def test_moderate_preview_requires_separate_approval_and_aggressive_stays_blocked(
@@ -167,40 +198,99 @@ def test_moderate_preview_requires_separate_approval_and_aggressive_stays_blocke
     previews = asyncio.run(generate_tempo_previews(report, renderer, allow_moderate=True))
 
     assert len(previews) == 2
-    assert any("short-01" in path for path in previews)
-    assert all("short-02" not in path for path in previews)
+    assert any("short-01" in item["preview_path"] for item in previews)
+    assert all("short-02" not in item["preview_path"] for item in previews)
 
 
 @pytest.mark.asyncio
 async def test_ffmpeg_preview_uses_atempo_without_mastering(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    arguments: list[str] = []
+    commands: list[list[str]] = []
 
     class Process:
         returncode = 0
 
+        def __init__(self, arguments: tuple[str, ...]) -> None:
+            self.arguments = arguments
+
         async def communicate(self) -> tuple[bytes, bytes]:
-            await asyncio.to_thread(Path(arguments[-1]).write_bytes, b"wav")
-            return b"", b""
+            if "-filter:a" in self.arguments:
+                await asyncio.to_thread(Path(self.arguments[-1]).write_bytes, b"wav")
+                return b"", b""
+            return b"300.000000\n", b""
 
     async def fake_exec(*args: str, **kwargs: object) -> Process:
         del kwargs
-        arguments.extend(args)
-        return Process()
+        commands.append(list(args))
+        return Process(args)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     source = tmp_path / "raw.mp3"
     source.write_bytes(b"raw")
     output = tmp_path / "preview.wav"
-    await FFmpegTempoPreviewRenderer().render(source, output, 1.1)
+    result = await FFmpegTempoPreviewRenderer().render(source, output, 1.1)
 
-    command = " ".join(arguments)
+    command = " ".join(commands[0])
     assert "atempo=1.100000" in command
     assert "loudnorm" not in command
     assert "master" not in command
     assert "pcm_s16le" in command
     assert output.read_bytes() == b"wav"
+    assert result["preview_duration_seconds"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_unavailable_has_specific_diagnostic(tmp_path: Path) -> None:
+    with pytest.raises(VoiceoverTimingError, match="FFmpeg or ffprobe is unavailable"):
+        await FFmpegTempoPreviewRenderer("missing-ffmpeg", "missing-ffprobe").render(
+            tmp_path / "source.mp3", tmp_path / "preview.wav", 1.1
+        )
+
+
+def test_documented_nested_voice_root_resolves_legacy_package(tmp_path: Path) -> None:
+    documented = (
+        VOICE_ROOT.parent
+        / "compound-interest-is-powerful-but-only-if-you-understand-these-three-limits"
+        / RUN_ID
+    )
+    report = audit_voiceover_timing(CONTENT_ROOT, documented, tmp_path)
+
+    assert Path(report["voice_root"]) == VOICE_ROOT.resolve()
+
+
+def test_relative_raw_audio_path_resolves_from_voice_root(tmp_path: Path) -> None:
+    copied = tmp_path / "voice"
+    shutil.copytree(VOICE_ROOT, copied)
+    manifest_path = copied / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["units"]["long_form"]["target_audio_path"] = "long-form/voiceover.mp3"
+    manifest_path.write_text(json.dumps(manifest))
+
+    report = audit_voiceover_timing(CONTENT_ROOT, copied, tmp_path / "output")
+
+    assert report["units"]["long_form"]["audio_valid"] is True
+
+
+def test_missing_audio_and_checksum_mismatch_have_specific_diagnostics(tmp_path: Path) -> None:
+    copied = tmp_path / "voice"
+    shutil.copytree(VOICE_ROOT, copied)
+    audio = copied / "long-form/voiceover.mp3"
+    manifest_path = copied / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["units"]["long_form"]["target_audio_path"] = audio.as_posix()
+    manifest_path.write_text(json.dumps(manifest))
+    audio.unlink()
+    with pytest.raises(VoiceoverTimingError, match="Raw audio is missing for long_form"):
+        audit_voiceover_timing(CONTENT_ROOT, copied, tmp_path / "missing-output")
+
+    shutil.copytree(VOICE_ROOT, copied, dirs_exist_ok=True)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["units"]["long_form"]["target_audio_path"] = audio.as_posix()
+    manifest_path.write_text(json.dumps(manifest))
+    audio.write_bytes(b"changed")
+    with pytest.raises(VoiceoverTimingError, match="Raw audio checksum mismatch for long_form"):
+        audit_voiceover_timing(CONTENT_ROOT, copied, tmp_path / "checksum-output")
 
 
 def test_resolution_options_are_reported_without_selecting_one(tmp_path: Path) -> None:
@@ -219,3 +309,12 @@ def _tree(root: Path) -> dict[str, str]:
         for path in root.rglob("*")
         if path.is_file()
     }
+
+
+def _load_cli() -> Any:
+    path = ROOT / "apps/api/scripts/run_voiceover_timing_audit.py"
+    specification = spec_from_file_location("voiceover_timing_cli_test", path)
+    assert specification is not None and specification.loader is not None
+    module = module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module

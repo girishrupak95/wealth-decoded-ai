@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 
+from app.config.settings import FFmpegRenderSettings
 from shared.voiceover.timing import (
     FFmpegTempoPreviewRenderer,
     VoiceoverTimingError,
@@ -36,9 +37,10 @@ async def async_main(options: argparse.Namespace) -> int:
             options.content_root, options.voice_root, options.output_root
         )
         if options.generate_previews:
+            ffmpeg = FFmpegRenderSettings()
             await generate_tempo_previews(
                 report,
-                FFmpegTempoPreviewRenderer(),
+                FFmpegTempoPreviewRenderer(ffmpeg.ffmpeg_executable, ffmpeg.ffprobe_executable),
                 allow_moderate=options.allow_moderate_previews,
             )
         write_timing_report(report)

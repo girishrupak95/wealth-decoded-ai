@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -29,17 +30,22 @@ class VoiceoverTimingError(ValueError):
 class TempoPreviewRenderer(Protocol):
     """Local pitch-preserving preview operation."""
 
-    async def render(self, source: Path, output: Path, factor: float) -> None: ...
+    async def render(self, source: Path, output: Path, factor: float) -> dict[str, Any]: ...
 
 
 class FFmpegTempoPreviewRenderer:
     """Create local WAV timing previews with FFmpeg's pitch-preserving atempo filter."""
 
-    def __init__(self, executable: str = "ffmpeg") -> None:
+    def __init__(self, executable: str = "ffmpeg", probe_executable: str = "ffprobe") -> None:
         self._executable = executable
+        self._probe_executable = probe_executable
 
-    async def render(self, source: Path, output: Path, factor: float) -> None:
+    async def render(self, source: Path, output: Path, factor: float) -> dict[str, Any]:
         """Render one timing-only copy without loudness processing or mastering."""
+        if not _executable_available(self._executable) or not _executable_available(
+            self._probe_executable
+        ):
+            raise VoiceoverTimingError("FFmpeg or ffprobe is unavailable.")
         output.parent.mkdir(parents=True, exist_ok=True)
         temporary = output.with_name(f".{output.stem}.tmp{output.suffix}")
         process = await asyncio.create_subprocess_exec(
@@ -59,10 +65,41 @@ class FFmpegTempoPreviewRenderer:
         _, stderr = await process.communicate()
         if process.returncode != 0:
             await asyncio.to_thread(temporary.unlink, missing_ok=True)
-            raise VoiceoverTimingError(
-                f"Local FFmpeg tempo preview failed: {stderr.decode(errors='replace')[-300:]}"
-            )
+            del stderr
+            raise VoiceoverTimingError("Local FFmpeg tempo preview failed.")
         await asyncio.to_thread(os.replace, temporary, output)
+        duration = await self._duration(output)
+        return {
+            "preview_path": output.as_posix(),
+            "source_audio_checksum": _checksum(source),
+            "tempo_factor": factor,
+            "preview_checksum": _checksum(output),
+            "preview_duration_seconds": duration,
+        }
+
+    async def _duration(self, path: Path) -> float:
+        process = await asyncio.create_subprocess_exec(
+            self._probe_executable,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await process.communicate()
+        if process.returncode != 0:
+            raise VoiceoverTimingError("Generated tempo preview could not be probed.")
+        try:
+            duration = float(stdout.decode().strip())
+        except ValueError as error:
+            raise VoiceoverTimingError("Generated tempo preview duration is invalid.") from error
+        if duration <= 0:
+            raise VoiceoverTimingError("Generated tempo preview duration is invalid.")
+        return duration
 
 
 def audit_voiceover_timing(
@@ -72,21 +109,26 @@ def audit_voiceover_timing(
 ) -> dict[str, Any]:
     """Audit actual validated audio timing without modifying either input package."""
     content_root = content_root.resolve()
-    voice_root = voice_root.resolve()
+    if not content_root.is_dir():
+        raise VoiceoverTimingError("Content root is missing or invalid.")
+    voice_root = _resolve_voice_root(voice_root)
     destination = (output_root / voice_root.name).resolve()
     if voice_root == destination or voice_root in destination.parents:
         raise VoiceoverTimingError("Timing output must be outside the raw voiceover package.")
     content_before = tree_checksums(content_root)
     voice_before = tree_checksums(voice_root)
-    manifest = _load_json(voice_root / "manifest.json")
+    manifest = _load_json(voice_root / "manifest.json", "Voice manifest")
     if manifest.get("status") != "complete":
         raise VoiceoverTimingError("Voiceover production package is not complete.")
     units: dict[str, dict[str, Any]] = {}
     for unit_id, directory_name in UNIT_DIRECTORIES.items():
         unit = manifest["units"][unit_id]
-        metadata = _load_json(voice_root / directory_name / "metadata.json")
-        audio = voice_root / directory_name / metadata["audio_filename"]
-        audio_valid = _audio_valid(audio, metadata, unit)
+        metadata = _load_json(
+            voice_root / directory_name / "metadata.json", f"{unit_id} unit metadata"
+        )
+        audio = _resolve_audio_path(voice_root, directory_name, unit, metadata)
+        _validate_audio(audio, metadata, unit, manifest)
+        audio_valid = True
         words = int(unit["spoken_word_count"])
         estimated = float(unit["estimated_duration_seconds"])
         actual = float(metadata["generated_duration_seconds"])
@@ -177,10 +219,10 @@ async def generate_tempo_previews(
     renderer: TempoPreviewRenderer,
     *,
     allow_moderate: bool = False,
-) -> list[str]:
+) -> list[dict[str, Any]]:
     """Generate explicitly requested local previews allowed by the tempo policy."""
     voice_before = tree_checksums(Path(report["voice_root"]))
-    previews: list[str] = []
+    previews: list[dict[str, Any]] = []
     for unit_id, unit in report["units"].items():
         classification = unit["tempo_classification"]
         allowed = classification == "minor" or (classification == "moderate" and allow_moderate)
@@ -192,10 +234,15 @@ async def generate_tempo_previews(
             / UNIT_DIRECTORIES[unit_id]
             / "voiceover-tempo-preview.wav"
         )
-        await renderer.render(
+        preview = await renderer.render(
             Path(unit["raw_audio_path"]), output, unit["required_minimum_tempo_factor"]
         )
-        previews.append(output.as_posix())
+        expected_duration = unit["actual_duration_seconds"] / unit["required_minimum_tempo_factor"]
+        tolerance = max(0.5, expected_duration * 0.005)
+        if abs(preview["preview_duration_seconds"] - expected_duration) > tolerance:
+            raise VoiceoverTimingError("Generated tempo preview duration is outside tolerance.")
+        preview["unit_id"] = unit_id
+        previews.append(preview)
     if voice_before != tree_checksums(Path(report["voice_root"])):
         raise VoiceoverTimingError("Raw voiceover package changed during preview generation.")
     report["preview_files"] = previews
@@ -241,16 +288,34 @@ def write_timing_report(report: dict[str, Any]) -> None:
     _write_atomic(root / "timing-audit.md", "\n".join(lines))
 
 
-def _audio_valid(audio: Path, metadata: dict[str, Any], unit: dict[str, Any]) -> bool:
+def _validate_audio(
+    audio: Path,
+    metadata: dict[str, Any],
+    unit: dict[str, Any],
+    manifest: dict[str, Any],
+) -> None:
+    if not audio.is_file() or audio.stat().st_size == 0:
+        raise VoiceoverTimingError(f"Raw audio is missing for {unit['unit_id']}.")
+    checksum = _checksum(audio)
+    if checksum != metadata.get("audio_checksum") or checksum != unit.get("audio_checksum"):
+        raise VoiceoverTimingError(f"Raw audio checksum mismatch for {unit['unit_id']}.")
     try:
-        return bool(
-            audio.is_file()
-            and audio.stat().st_size > 0
-            and _checksum(audio) == metadata["audio_checksum"] == unit["audio_checksum"]
-            and float(metadata["generated_duration_seconds"]) > 0
+        duration = float(metadata["generated_duration_seconds"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise VoiceoverTimingError(
+            f"Generated duration is invalid for {unit['unit_id']}."
+        ) from error
+    if duration <= 0:
+        raise VoiceoverTimingError(f"Generated duration is invalid for {unit['unit_id']}.")
+    fingerprint = manifest.get("provider_configuration_fingerprint")
+    if (
+        not fingerprint
+        or metadata.get("provider_configuration_fingerprint") != fingerprint
+        or unit.get("provider_configuration_fingerprint") != fingerprint
+    ):
+        raise VoiceoverTimingError(
+            f"Provider configuration fingerprint is invalid for {unit['unit_id']}."
         )
-    except (OSError, KeyError, TypeError, ValueError):
-        return False
 
 
 def _target_violation(actual: float, minimum: int, maximum: int) -> str | None:
@@ -261,14 +326,51 @@ def _target_violation(actual: float, minimum: int, maximum: int) -> str | None:
     return None
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _load_json(path: Path, label: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise VoiceoverTimingError(f"{label} is missing.") from error
     except (OSError, ValueError) as error:
-        raise VoiceoverTimingError("Voiceover timing input is missing or invalid.") from error
+        raise VoiceoverTimingError(f"{label} is invalid.") from error
     if not isinstance(value, dict):
-        raise VoiceoverTimingError("Voiceover timing input is missing or invalid.")
+        raise VoiceoverTimingError(f"{label} is invalid.")
     return value
+
+
+def _resolve_voice_root(path: Path) -> Path:
+    resolved = path.resolve()
+    if (resolved / "manifest.json").is_file():
+        return resolved
+    legacy = resolved.parent.parent / resolved.name
+    if (legacy / "manifest.json").is_file():
+        return legacy
+    if not resolved.is_dir():
+        raise VoiceoverTimingError("Voice root is missing or invalid.")
+    raise VoiceoverTimingError("Voice manifest is missing.")
+
+
+def _resolve_audio_path(
+    voice_root: Path,
+    directory_name: str,
+    unit: dict[str, Any],
+    metadata: dict[str, Any],
+) -> Path:
+    configured = unit.get("target_audio_path")
+    if isinstance(configured, str) and configured:
+        path = Path(configured)
+        candidate = path if path.is_absolute() else voice_root / path
+        if candidate.is_file():
+            return candidate.resolve()
+    filename = metadata.get("audio_filename")
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        raise VoiceoverTimingError(f"Raw audio path is invalid for {unit['unit_id']}.")
+    return (voice_root / directory_name / filename).resolve()
+
+
+def _executable_available(executable: str) -> bool:
+    path = Path(executable)
+    return path.is_file() if path.is_absolute() else shutil.which(executable) is not None
 
 
 def _checksum(path: Path) -> str:
