@@ -12,6 +12,7 @@ from app.config.settings import FFmpegRenderSettings
 from shared.voiceover.approval import (
     FFprobeDurationInspector,
     VoiceoverApprovalError,
+    approve_native_speed_experiment,
     approve_timing_previews,
     load_approval_status,
 )
@@ -22,11 +23,13 @@ DEFAULT_OUTPUT_ROOT = Path("generated/approved-voiceovers")
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse explicit human approval or read-only status inspection."""
     parser = argparse.ArgumentParser(description="Approve voiceover timing previews.")
-    parser.add_argument("--timing-root", type=Path, required=True)
-    parser.add_argument("--voice-root", type=Path, required=True)
+    parser.add_argument("--timing-root", type=Path)
+    parser.add_argument("--voice-root", type=Path)
+    parser.add_argument("--experiment-root", type=Path)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--unit", action="append", choices=("long_form", "short_01", "short_02"))
     parser.add_argument("--approve-preview", action="store_true")
+    parser.add_argument("--approve-experiment", action="store_true")
     parser.add_argument("--status", action="store_true")
     return parser.parse_args(arguments)
 
@@ -34,17 +37,31 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
 async def async_main(options: argparse.Namespace) -> int:
     """Promote only explicitly approved units, or inspect status without mutation."""
     try:
-        timing_path = options.timing_root / "timing-audit.json"
-        timing = json.loads(timing_path.read_text(encoding="utf-8"))
-        output = (options.output_root / options.timing_root.name).resolve()
-        if options.status:
-            manifest = load_approval_status(output, timing)
+        ffmpeg = FFmpegRenderSettings()
+        if options.approve_experiment:
+            if options.unit != ["short_02"] or options.experiment_root is None:
+                raise VoiceoverApprovalError(
+                    "Experiment approval requires --unit short_02 and --experiment-root."
+                )
+            manifest = await approve_native_speed_experiment(
+                options.experiment_root,
+                FFprobeDurationInspector(ffmpeg.ffprobe_executable),
+            )
+            output = Path(manifest["units"]["short_02"]["production_audio_path"]).parents[1]
+            timing = None
         else:
+            if options.timing_root is None or options.voice_root is None:
+                raise VoiceoverApprovalError("--timing-root and --voice-root are required.")
+            timing_path = options.timing_root / "timing-audit.json"
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+            output = (options.output_root / options.timing_root.name).resolve()
+        if options.status and timing is not None:
+            manifest = load_approval_status(output, timing)
+        elif not options.approve_experiment:
             if not options.approve_preview or not options.unit:
                 raise VoiceoverApprovalError(
                     "Explicit --approve-preview and at least one --unit are required."
                 )
-            ffmpeg = FFmpegRenderSettings()
             manifest = await approve_timing_previews(
                 options.timing_root,
                 options.voice_root,

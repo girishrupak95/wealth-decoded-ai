@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 
+from shared.models.script_policy import short_content_policy
 from shared.voiceover.approval import (
     VoiceoverApprovalError,
+    approve_native_speed_experiment,
     approve_timing_previews,
     downstream_timing_source,
 )
@@ -31,6 +33,14 @@ CONTENT_ROOT = (
 )
 VOICE_ROOT = ROOT / "generated/voiceover-production" / RUN_ID
 TIMING_ROOT = ROOT / "generated/voiceover-timing" / RUN_ID
+APPROVED_ROOT = ROOT / "generated/approved-voiceovers" / RUN_ID
+EXPERIMENT_ROOT = (
+    ROOT
+    / "generated/voiceover-experiments"
+    / RUN_ID
+    / "short-02"
+    / "7f92a85de5921eb71b48ec8e185b9c21c6416ab007a9b427f59b7aaaec83069f"
+)
 
 
 class Inspector:
@@ -38,7 +48,12 @@ class Inspector:
         self.offset = offset
 
     async def duration_seconds(self, path: Path) -> float:
-        expected = 300.015442 if "long-form" in path.parts else 45.010227
+        if "long-form" in path.parts:
+            expected = 300.015442
+        elif "short-01" in path.parts:
+            expected = 45.010227
+        else:
+            expected = 49.458503
         return expected + self.offset
 
 
@@ -221,6 +236,85 @@ def test_cli_requires_explicit_human_approval(tmp_path: Path, capsys: Any) -> No
     assert not (tmp_path / RUN_ID).exists()
 
 
+def test_native_short_two_experiment_completes_approved_package(tmp_path: Path) -> None:
+    approved = tmp_path / "approved" / RUN_ID
+    _copy_pre_short2_approval(approved)
+    experiment = _experiment_copy(tmp_path, approved)
+    before_long = _checksum(approved / "long-form/voiceover.wav")
+    before_short_one = _checksum(approved / "short-01/voiceover.wav")
+
+    manifest = asyncio.run(approve_native_speed_experiment(experiment, Inspector()))
+
+    short_two = manifest["units"]["short_02"]
+    production = Path(short_two["production_audio_path"])
+    candidate = Path(json.loads((experiment / "manifest.json").read_text())["generated_audio_path"])
+    assert manifest["status"] == "complete"
+    assert manifest["timing_ready"] is True
+    assert all(unit["timing_ready"] for unit in manifest["units"].values())
+    assert short_two["status"] == "approved"
+    assert short_two["source_type"] == "native_tts_speed_experiment"
+    assert short_two["production_audio_checksum"] == (
+        "bb89b22627bb2a0374c787f4c2d26991cdc89e1718f207eedd9141154445cc4f"
+    )
+    assert short_two["production_duration_seconds"] == 49.458503
+    assert short_two["provider_speed"] == 1.2
+    assert short_two["local_tempo_factor"] == 1.0
+    assert short_two["timing_policy_exception"] is True
+    assert short_two["production_timing_exception"] is True
+    assert production.read_bytes() == candidate.read_bytes()
+    assert _checksum(approved / "long-form/voiceover.wav") == before_long
+    assert _checksum(approved / "short-01/voiceover.wav") == before_short_one
+    assert short_content_policy().max_duration_seconds == 45
+
+
+def test_native_approval_is_idempotent_and_downstream_uses_all_approved_durations(
+    tmp_path: Path,
+) -> None:
+    approved = tmp_path / "approved" / RUN_ID
+    _copy_pre_short2_approval(approved)
+    experiment = _experiment_copy(tmp_path, approved)
+    first = asyncio.run(approve_native_speed_experiment(experiment, Inspector()))
+    production = Path(first["units"]["short_02"]["production_audio_path"])
+    modified = production.stat().st_mtime_ns
+
+    second = asyncio.run(approve_native_speed_experiment(experiment, Inspector()))
+    voice = json.loads((VOICE_ROOT / "manifest.json").read_text())
+
+    assert production.stat().st_mtime_ns == modified
+    assert downstream_timing_source(second, "long_form", voice)["duration_seconds"] == 300.015442
+    assert downstream_timing_source(second, "short_01", voice)["duration_seconds"] == 45.010227
+    assert downstream_timing_source(second, "short_02", voice)["duration_seconds"] == 49.458503
+    assert "previews" not in downstream_timing_source(second, "short_02", voice)["path"]
+
+
+def test_native_approval_requires_exact_candidate_bindings(tmp_path: Path) -> None:
+    approved = tmp_path / "approved" / RUN_ID
+    _copy_pre_short2_approval(approved)
+    experiment = _experiment_copy(tmp_path, approved)
+    manifest_path = experiment / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["proposed_speed"] = 1.1
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(VoiceoverApprovalError, match=r"provider speed must be 1\.2"):
+        asyncio.run(approve_native_speed_experiment(experiment, Inspector()))
+
+
+def test_cli_requires_explicit_experiment_approval(tmp_path: Path, capsys: Any) -> None:
+    cli = _load_cli()
+    options = cli.parse_arguments(
+        [
+            "--experiment-root",
+            str(EXPERIMENT_ROOT),
+            "--unit",
+            "short_02",
+        ]
+    )
+
+    assert asyncio.run(cli.async_main(options)) == 1
+    assert "--timing-root and --voice-root are required" in capsys.readouterr().out
+
+
 def _checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -240,3 +334,28 @@ def _load_cli() -> Any:
     module = module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def _experiment_copy(tmp_path: Path, approved: Path) -> Path:
+    experiment = tmp_path / "experiment" / EXPERIMENT_ROOT.name
+    shutil.copytree(EXPERIMENT_ROOT, experiment)
+    manifest_path = experiment / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["approved_root"] = approved.as_posix()
+    manifest_path.write_text(json.dumps(manifest))
+    return experiment
+
+
+def _copy_pre_short2_approval(destination: Path) -> None:
+    shutil.copytree(APPROVED_ROOT, destination)
+    shutil.rmtree(destination / "short-02")
+    manifest_path = destination / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "resolution_required"
+    manifest["timing_ready"] = False
+    manifest["units"]["short_02"] = {
+        "unit_id": "short_02",
+        "status": "resolution_required",
+        "timing_ready": False,
+    }
+    manifest_path.write_text(json.dumps(manifest))
