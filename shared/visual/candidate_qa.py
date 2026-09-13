@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -387,8 +388,17 @@ async def record_visual_review(
         "reject": "rejected",
         "regenerate_required": "regenerate_required",
     }[decision]
+    normalized_note = note.strip() if note and note.strip() else None
+    if (
+        record.get("review_status") == status
+        and record.get("human_approval") is True
+        and record.get("review_note") == normalized_note
+    ):
+        return record
     record["review_status"] = status
-    record["review_note"] = note.strip() if note and note.strip() else None
+    record["human_approval"] = True
+    record["approval_timestamp"] = datetime.now(UTC).isoformat()
+    record["review_note"] = normalized_note
     await write_bytes_atomic(path, json.dumps(record, indent=2, sort_keys=True).encode())
     manifest = _load(qa_root / "manifest.json", "Visual QA manifest")
     reviews = [
@@ -413,3 +423,37 @@ async def record_visual_review(
         qa_root / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True).encode()
     )
     return record
+
+
+async def approve_named_visual_candidates(
+    qa_root: Path,
+    scene_keys: list[str],
+) -> dict[str, Any]:
+    """Approve only an explicit, duplicate-free list after full candidate revalidation."""
+    if not scene_keys or len(scene_keys) != len(set(scene_keys)):
+        raise CandidateVisualQaError("Explicit approval scene list is empty or duplicated.")
+    if any("*" in key or "/" not in key for key in scene_keys):
+        raise CandidateVisualQaError("Wildcard or malformed visual approval target is forbidden.")
+    manifest = _load(qa_root / "manifest.json", "Visual QA manifest")
+    visual_root = Path(manifest["visual_root"])
+    # Rebuilding validates every source/normalized checksum and every immutable plan binding.
+    await CandidateVisualQaService(visual_root, qa_root.parent).build()
+    records = {
+        f"{record['unit_id']}/{record['scene_id']}": record
+        for record in (
+            _load(path, "Visual review") for path in sorted((qa_root / "reviews").rglob("*.json"))
+        )
+    }
+    unknown = [key for key in scene_keys if key not in records]
+    if unknown:
+        raise CandidateVisualQaError("Explicit approval contains an unknown candidate scene.")
+    for key in scene_keys:
+        unit_id, scene_id = key.split("/", 1)
+        await record_visual_review(
+            qa_root,
+            unit_id=unit_id,
+            scene_id=scene_id,
+            decision="approve",
+            note="Explicitly accepted by the user for first-episode production.",
+        )
+    return _load(qa_root / "manifest.json", "Visual QA manifest")
