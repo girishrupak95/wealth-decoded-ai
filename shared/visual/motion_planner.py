@@ -82,6 +82,10 @@ class MotionPlanner:
 
     def _plan_scene(self, scene: StoryboardScene) -> SceneMotionPlan:
         duration = float(scene.end_time_seconds - scene.start_time_seconds)
+        return self.plan_scene(scene, duration=duration)
+
+    def plan_scene(self, scene: StoryboardScene, *, duration: float) -> SceneMotionPlan:
+        """Plan one scene at an authoritative externally compiled duration."""
         if duration <= 0:
             raise MotionPlanningError("Storyboard scene duration must be positive.")
         warnings: list[str] = []
@@ -93,6 +97,12 @@ class MotionPlanner:
             actions = self._chart_actions(scene, duration)
         elif scene.visual_asset_type == VisualAssetType.TYPOGRAPHY:
             actions = self._typography_actions(scene, duration)
+        elif scene.visual_asset_type == VisualAssetType.MOTION_GRAPHIC:
+            actions = [self._camera_action(scene, MotionType.PUSH_IN, duration)]
+            warnings.append(
+                "Motion-graphic semantic layers are deferred; approved base frame uses "
+                "restrained camera treatment."
+            )
         else:
             raise MotionPlanningError("Approved package contains an unsupported motion asset type.")
         return SceneMotionPlan(

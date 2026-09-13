@@ -25,6 +25,7 @@ from shared.models.motion import (
     MotionIntensity,
     MotionPlan,
     MotionType,
+    SceneMotionPlan,
     SceneTransition,
     SceneTransitionType,
 )
@@ -77,31 +78,7 @@ class MotionCompiler:
         compiled_scenes: list[CompiledSceneMotion] = []
         for scene_plan in plan.scene_plans:
             source_scene = scenes_by_id[scene_plan.scene_id]
-            self._detect_conflicts(scene_plan.actions)
-            actions = [
-                self._compile_action(action, source_scene)
-                for action in sorted(
-                    scene_plan.actions,
-                    key=lambda item: (item.order, -item.priority, item.action_id),
-                )
-                if action.motion_type != MotionType.STATIC
-            ]
-            compiled_scenes.append(
-                CompiledSceneMotion(
-                    scene_id=scene_plan.scene_id,
-                    sequence_number=scene_plan.sequence_number,
-                    duration_seconds=scene_plan.duration_seconds,
-                    visual_asset_type=scene_plan.visual_asset_type,
-                    actions=actions,
-                    transition_in=self._compile_transition(
-                        scene_plan.transition_in, scene_plan.duration_seconds
-                    ),
-                    transition_out=self._compile_transition(
-                        scene_plan.transition_out, scene_plan.duration_seconds
-                    ),
-                    warnings=list(scene_plan.warnings),
-                )
-            )
+            compiled_scenes.append(self.compile_scene(scene_plan, source_scene))
         compiled = CompiledMotionPlan(
             package_id=package.package_id,
             approved_package_checksum=package.package_checksum,
@@ -111,6 +88,34 @@ class MotionCompiler:
             warnings=list(plan.warnings),
         )
         return self.validate(compiled, motion_plan=plan, approved_package=approved_package)
+
+    def compile_scene(
+        self, scene_plan: SceneMotionPlan, source_scene: StoryboardScene
+    ) -> CompiledSceneMotion:
+        """Compile one validated scene without imposing a package container shape."""
+        self._detect_conflicts(scene_plan.actions)
+        actions = [
+            self._compile_action(action, source_scene)
+            for action in sorted(
+                scene_plan.actions,
+                key=lambda item: (item.order, -item.priority, item.action_id),
+            )
+            if action.motion_type != MotionType.STATIC
+        ]
+        return CompiledSceneMotion(
+            scene_id=scene_plan.scene_id,
+            sequence_number=scene_plan.sequence_number,
+            duration_seconds=scene_plan.duration_seconds,
+            visual_asset_type=scene_plan.visual_asset_type,
+            actions=actions,
+            transition_in=self._compile_transition(
+                scene_plan.transition_in, scene_plan.duration_seconds
+            ),
+            transition_out=self._compile_transition(
+                scene_plan.transition_out, scene_plan.duration_seconds
+            ),
+            warnings=list(scene_plan.warnings),
+        )
 
     def validate(
         self,
